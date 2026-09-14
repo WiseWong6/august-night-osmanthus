@@ -17,8 +17,10 @@ const visibleLeaves=(()=>{
 const W=720,H=960,DURATION=24,TREE_END=3,MORPH_TIME=.85;
 // 主画面独立取景：去掉原来给控件预留的空白，再等比映射到 3:4 画布。
 const VIEW={width:640,height:640*4/3,scale:720/640};
-const LEAF_START=2.35,LEAF_END=3.65,FLOWER_DELAY=.75;
-const BLOOM_END=Math.max(...flowers.map(f=>f.start+f.duration))+FLOWER_DELAY;
+const LEAF_START=data.leafClockStart,LEAF_END=data.leafClockEnd;
+// 第一批花苞紧接最后一片叶子展开，整段花期和后续风声一起前移。
+const FLOWER_OFFSET=LEAF_END-Math.min(...flowers.map(f=>f.budAt));
+const BLOOM_END=Math.max(...flowers.map(f=>f.start+f.duration))+FLOWER_OFFSET;
 // 只改变整棵树的显示位置和比例，内部坐标、枝叶尺寸比例与生长时间不变。
 const PLACEMENT={scale:.6,x:225,y:770,rootX:360,rootY:745};
 const toScreen=q=>({x:(q.x-PLACEMENT.rootX)*PLACEMENT.scale+PLACEMENT.x,y:(q.y-PLACEMENT.rootY)*PLACEMENT.scale+PLACEMENT.y});
@@ -43,10 +45,12 @@ const branchProgress=(b,t)=>clamp((t-b.start)/b.duration);
 function leafProgress(leaf,t){
   if(t<=LEAF_START)return 0;
   if(t>=LEAF_END)return 1;
-  return branchProgress(leaf,mix(data.leafClockStart,data.leafClockEnd,(t-LEAF_START)/(LEAF_END-LEAF_START)));
+  // 原始时间从枝条长到叶柄时开始，叶片随各自枝条展开。
+  return branchProgress(leaf,t);
 }
 function flowerProgress(f,t){
-  t-=FLOWER_DELAY;
+  if(t<=LEAF_END)return 0;
+  t-=FLOWER_OFFSET;
   if(t<=f.budAt)return 0;
   if(t<f.start)return .22*smooth((t-f.budAt)/(f.start-f.budAt));
   return mix(.22,f.maxOpen,branchProgress(f,t));
@@ -203,9 +207,9 @@ function starAppearance(f,t){
   const period=3.6+seed*2.4,phase=((t-18+seed*period)%period+period)%period;
   const twinkle=reduced.matches||f.starRank%4!==0?0:
     smooth((t-18)/1.2)*smooth(phase/.45)*(1-smooth((phase-.45)/.85));
-  const shimmer=f.starRank%4===0&&!reduced.matches?.64+.36*twinkle:1;
-  return {radius:(bright?1.35+seed*.45:.55+seed*.5)*(1+.22*twinkle),
-    alpha:(bright?.92:.3+seed*.25)*(1-.22*near*moonProgress(t))*shimmer,bright,twinkle};
+  const restingAlpha=(bright?.92:.3+seed*.25)*(1-.22*near*moonProgress(t))*(f.starRank%4===0&&!reduced.matches?.6:1);
+  return {radius:mix(bright?1.35+seed*.45:.55+seed*.5,2.2+seed*.4,twinkle),
+    alpha:mix(restingAlpha,.98,twinkle),bright,twinkle};
 }
 function insideMoon(q){
   return Math.hypot(q.x-moon.x,q.y-moon.y)<=moon.r;
@@ -220,6 +224,14 @@ function butterflySpread(f,t){
   const flap=.22+.78*(.5+.5*Math.sin(t*11+f.phase));
   // 化形时先保持相近的外轮廓，完成后再平滑进入振翅。
   return mix(.84,flap,smooth((t-f.morphAt-MORPH_TIME)/.45));
+}
+function butterflyWing(f,t,side){
+  const spread=butterflySpread(f,t),flight=smooth((t-f.morphAt-MORPH_TIME)/.45);
+  const bank=Math.sin(t*1.7+f.phase)*.1*flight;
+  // 每片翅从胸部翻转，收拢时翅尖抬起；左右翼迎光角度不同。
+  const width=spread*(1-side*bank*.3),lift=-(1-spread)*.34+side*bank*.36;
+  const sheen=Math.exp(-(((spread-.72+side*.07+bank*.3)/.26)**2));
+  return {width,lift,sheen};
 }
 // 表面亮边与白色闪点共享一次反射，先掠过亮边，再达到短促峰值。
 function reflectionCycle(f,t){
@@ -287,14 +299,14 @@ function moonOutline(progress){
 }
 function grainPixel(x,y){
   let n=Math.imul(x+173,374761393)^Math.imul(y+719,668265263);
-  n=Math.imul(n^(n>>>13),1274126177);const grain=((n>>>0)/4294967296-.5)*22;
-  return [Math.round(36+grain*.9),Math.round(79+grain*.85),Math.round(241+grain*.7),255];
+  n=Math.imul(n^(n>>>13),1274126177);const grain=Math.round(((n>>>0)/4294967296-.5)*6);
+  return [25+grain,28+grain,34+grain,255];
 }
 function phaseAt(t){
   const phase=moonProgress(t);
   if(phase>=1)return '满月 · 星光留在途中';
   if(phase>0)return phase<.5?'蝶入月光 · 月牙渐盈':'蝶入月光 · 渐成满月';
-  return t===0?'夜色':t<LEAF_START?'桂树生长':t<LEAF_END?'桂叶舒展':t<BLOOM_END?'桂花开放':t<Math.min(...fallingFlowers.map(f=>f.release))?'满树桂花':t<WIND.start?'桂花飘落':t<WIND.end?'风过 · 花落成蝶':t<22?'群蝶赴月':'月下归静';
+  return t===0?'夜色':t<LEAF_START?'桂树生长':t<LEAF_END?'枝叶共长':t<BLOOM_END?'桂花开放':t<Math.min(...fallingFlowers.map(f=>f.release))?'满树桂花':t<WIND.start?'桂花飘落':t<WIND.end?'风过 · 花落成蝶':t<22?'群蝶赴月':'月下归静';
 }
 
 const soundStages={
@@ -304,7 +316,7 @@ const soundStages={
     const ordered=[...flowers].sort((a,b)=>a.start+a.duration*.4-b.start-b.duration*.4);
     return Array.from({length:11},(_,i)=>{
       const f=ordered[Math.floor(i*(ordered.length-1)/10)],q=toScreen(f);
-      return {time:f.start+FLOWER_DELAY+f.duration*.4,pan:(q.x/VIEW.width-.5)*1.4};
+      return {time:f.start+FLOWER_OFFSET+f.duration*.4,pan:(q.x/VIEW.width-.5)*1.4};
     });
   })(),
   flights:fallingFlowers.filter((_,i)=>i%16===0).map(f=>({
@@ -402,34 +414,71 @@ new p5(p=>{
     }
     ctx.restore();ctx.restore();
   }
-  const wingColors=['#bc862c','#8996a6','#b08a49','#a6a99f'];
+  const wingMaterials=[
+    {root:'#9b7135',middle:'#ebbd63',tip:'#fff0bc',rim:'#fff8df',vein:'#946a32',light:'255,249,224'},
+    {root:'#778caa',middle:'#cedbe8',tip:'#f7f6f1',rim:'#ffffff',vein:'#657b98',light:'246,250,255'}
+  ];
   function leafShape(ctx,leaf){
     const n=leaf.size,w=leaf.breadth,bend=leaf.bend*n;
     ctx.beginPath();ctx.moveTo(0,0);
     ctx.bezierCurveTo(n*.20,-n*w,n*.73,-n*w+bend,n,bend);
     ctx.bezierCurveTo(n*.71,n*w+bend,n*.22,n*w*.85,0,0);ctx.fill();
   }
-  function drawButterfly(ctx,leaf,t,morph){
-    const n=leaf.wingSize*.64,flap=butterflySpread(leaf,t);
-    ctx.save();ctx.scale(flap,1);
-    for(const side of [-1,1]){
-      ctx.save();ctx.scale(side,1);
-      const reflection=ctx.createLinearGradient(0,n*.3,n,-n*.65);
-      reflection.addColorStop(0,wingColors[leaf.color]);
-      const sheen=.32+.34*(.5+.5*Math.sin(t*11+leaf.phase+side*.6));
-      reflection.addColorStop(sheen,leaf.color%2?'#ecece1':'#f8cf65');
-      reflection.addColorStop(Math.min(.94,sheen+.16),leaf.color%2?'#fff9e9':'#fff1bd');
-      reflection.addColorStop(1,leaf.color%2?'#9da8b6':'#c39440');
-      ctx.fillStyle=reflection;
-      ctx.beginPath();ctx.moveTo(0,0);
-      ctx.bezierCurveTo(n*.15,-n*.65,n*.98,-n*.86,n,-n*.28);
-      ctx.bezierCurveTo(n*1.04,n*.12,n*.43,n*.18,0,n*.08);ctx.fill();paintFlow(ctx,leaf,t,n);
-      ctx.globalAlpha*=.8;ctx.beginPath();ctx.moveTo(0,n*.06);
-      ctx.bezierCurveTo(n*.65,n*.05,n*.86,n*.57,n*.46,n*.64);
-      ctx.bezierCurveTo(n*.17,n*.67,n*.06,n*.34,0,n*.06);ctx.fill();paintFlow(ctx,leaf,t,n);ctx.restore();
+  function wingPath(ctx,n,hind){
+    ctx.beginPath();ctx.moveTo(0,n*.04);
+    if(hind){
+      ctx.bezierCurveTo(n*.36,-n*.02,n*.80,n*.18,n*.76,n*.43);
+      ctx.bezierCurveTo(n*.74,n*.55,n*.63,n*.66,n*.54,n*.66);
+      ctx.bezierCurveTo(n*.49,n*.74,n*.41,n*.75,n*.36,n*.68);
+      ctx.bezierCurveTo(n*.19,n*.68,n*.06,n*.29,0,n*.04);
+    }else{
+      ctx.bezierCurveTo(n*.20,-n*.43,n*.64,-n*.98,n*.90,-n*.98);
+      ctx.bezierCurveTo(n*.99,-n*.98,n,-n*.89,n,-n*.72);
+      ctx.bezierCurveTo(n*.97,-n*.42,n*.73,-n*.10,n*.42,n*.06);
+      ctx.bezierCurveTo(n*.23,n*.13,n*.08,n*.12,0,n*.04);
     }
-    ctx.restore();ctx.strokeStyle=leaf.color%2?'#e6edf6':'#f7e8bc';ctx.lineWidth=.7;
-    ctx.beginPath();ctx.moveTo(0,-n*.21);ctx.quadraticCurveTo(-.7,n*.12,0,n*.43);ctx.stroke();
+    ctx.closePath();
+  }
+  function drawButterfly(ctx,f,t){
+    const n=f.wingSize*.64,material=wingMaterials[f.color%2];
+    ctx.save();
+    for(const side of [-1,1]){
+      const wing=butterflyWing(f,t,side);
+      ctx.save();ctx.transform(side*wing.width,wing.lift,0,1,0,0);
+      // 后翅在下、前翅在上，薄翼边缘透光；高光随翻转出现，而非整面扫白。
+      for(const hind of [true,false]){
+        ctx.save();wingPath(ctx,n,hind);ctx.clip();
+        const surface=ctx.createLinearGradient(0,n*.15,n*.92,hind?n*.65:-n*.86);
+        surface.addColorStop(0,material.root);surface.addColorStop(.38,material.middle);surface.addColorStop(1,material.tip);
+        ctx.globalAlpha*=hind?.84:.94;ctx.fillStyle=surface;ctx.fillRect(-n*.1,-n*1.1,n*1.2,n*1.9);
+        const y=n*(hind?.35:-.57),x=n*(.48+.13*wing.width);
+        const pearl=ctx.createRadialGradient(x,y,0,x,y,n*.58);
+        pearl.addColorStop(0,`rgba(${material.light},.8)`);
+        pearl.addColorStop(.42,`rgba(${material.light},.32)`);pearl.addColorStop(1,`rgba(${material.light},0)`);
+        ctx.globalAlpha*=.28+.6*wing.sheen;ctx.fillStyle=pearl;ctx.fillRect(0,-n*1.1,n*1.1,n*1.9);ctx.restore();
+        ctx.save();ctx.globalAlpha*=.28;ctx.strokeStyle=material.vein;ctx.lineWidth=.3;ctx.lineCap='round';
+        ctx.beginPath();
+        if(hind){
+          ctx.moveTo(n*.03,n*.08);ctx.quadraticCurveTo(n*.34,n*.14,n*.65,n*.43);
+          ctx.moveTo(n*.03,n*.08);ctx.quadraticCurveTo(n*.25,n*.35,n*.36,n*.63);
+        }else{
+          ctx.moveTo(n*.04,0);ctx.quadraticCurveTo(n*.37,-n*.48,n*.87,-n*.88);
+          ctx.moveTo(n*.04,0);ctx.quadraticCurveTo(n*.47,-n*.19,n*.91,-n*.54);
+          ctx.moveTo(n*.04,0);ctx.quadraticCurveTo(n*.35,n*.02,n*.62,-n*.09);
+        }
+        ctx.stroke();ctx.restore();
+        ctx.save();ctx.globalAlpha*=.24+.3*wing.sheen;ctx.strokeStyle=material.rim;ctx.lineWidth=.28;
+        wingPath(ctx,n,hind);ctx.stroke();ctx.restore();
+      }
+      ctx.restore();
+    }
+    const body=ctx.createLinearGradient(-n*.08,0,n*.08,0);
+    body.addColorStop(0,material.root);body.addColorStop(.6,material.middle);body.addColorStop(1,material.rim);
+    ctx.fillStyle=body;ctx.beginPath();ctx.ellipse(0,n*.1,n*.065,n*.34,0,0,Math.PI*2);ctx.fill();
+    ctx.beginPath();ctx.ellipse(0,-n*.24,n*.075,n*.085,0,0,Math.PI*2);ctx.fill();
+    ctx.globalAlpha*=.75;ctx.strokeStyle=material.tip;ctx.lineWidth=.28;ctx.lineCap='round';ctx.beginPath();
+    ctx.moveTo(-n*.04,-n*.29);ctx.quadraticCurveTo(-n*.10,-n*.48,-n*.25,-n*.51);
+    ctx.moveTo(n*.04,-n*.29);ctx.quadraticCurveTo(n*.10,-n*.48,n*.25,-n*.51);ctx.stroke();ctx.restore();
   }
   function drawLeaf(leaf,t,surface=p){
     const amount=smooth(leafProgress(leaf,t));if(amount<=0)return;
@@ -473,25 +522,27 @@ new p5(p=>{
     flowerShape(ctx,f,flowerProgress(f,t));ctx.restore();
   }
   // 细光芒从亮核向两端退去，不用厚实星形或持续光晕。
-  function drawGlint(ctx,x,y,amount,scale){
+  function drawGlint(ctx,x,y,amount,scale,extent=1){
     if(amount<=.001)return;
     ctx.save();ctx.translate(x,y);ctx.globalAlpha*=amount;
     // 抵消树和飞行对象的缩放，让光核保持可辨认的画布尺寸。
-    const compensation=1/(VIEW.scale*PLACEMENT.scale*scale);ctx.scale(compensation,compensation);
+    const compensation=extent/(VIEW.scale*PLACEMENT.scale*scale);ctx.scale(compensation,compensation);
     const reach=GLINT.radius*(.5+.5*amount);
     const halo=ctx.createRadialGradient(0,0,0,0,0,4.5);
     halo.addColorStop(0,'rgba(255,250,223,.8)');halo.addColorStop(.25,'rgba(255,230,161,.22)');halo.addColorStop(1,'rgba(255,219,133,0)');
     ctx.fillStyle=halo;ctx.beginPath();ctx.arc(0,0,4.5,0,Math.PI*2);ctx.fill();
-    const ray=ctx.createLinearGradient(-reach,0,reach,0);
-    ray.addColorStop(0,'rgba(255,220,110,0)');
-    ray.addColorStop(.4,'rgba(255,241,185,.65)');
-    ray.addColorStop(.5,'#fffdf0');
-    ray.addColorStop(.6,'rgba(255,241,185,.65)');
-    ray.addColorStop(1,'rgba(255,220,110,0)');
-    ctx.strokeStyle=ray;ctx.lineWidth=GLINT.width;
-    ctx.beginPath();ctx.moveTo(-reach,0);ctx.lineTo(reach,0);ctx.stroke();
-    ctx.save();ctx.rotate(Math.PI/2);ctx.scale(.48,1);ctx.lineWidth=.55;
-    ctx.beginPath();ctx.moveTo(-reach,0);ctx.lineTo(reach,0);ctx.stroke();ctx.restore();
+    // 横、竖两道光芒使用相同长度、粗细和亮度衰减。
+    for(const angle of [0,Math.PI/2]){
+      ctx.save();ctx.rotate(angle);
+      const ray=ctx.createLinearGradient(-reach,0,reach,0);
+      ray.addColorStop(0,'rgba(255,220,110,0)');
+      ray.addColorStop(.4,'rgba(255,241,185,.65)');
+      ray.addColorStop(.5,'#fffdf0');
+      ray.addColorStop(.6,'rgba(255,241,185,.65)');
+      ray.addColorStop(1,'rgba(255,220,110,0)');
+      ctx.strokeStyle=ray;ctx.lineWidth=GLINT.width;
+      ctx.beginPath();ctx.moveTo(-reach,0);ctx.lineTo(reach,0);ctx.stroke();ctx.restore();
+    }
     ctx.fillStyle='#fffdf0';ctx.beginPath();ctx.ellipse(0,0,GLINT.core,GLINT.core,0,0,Math.PI*2);ctx.fill();ctx.restore();
   }
   function paintFlow(ctx,f,t,r,outline=false){
@@ -564,27 +615,30 @@ new p5(p=>{
       ctx.scale(appearance.size,appearance.size);drawFallingSymbol(ctx,f,t);
       ctx.restore();
     }
-    if(pose.morph>0){
-      ctx.globalAlpha=pose.opacity*pose.morph*(1-pose.star);drawButterfly(ctx,f,t,pose.morph);
+    if(pose.morph>0&&pose.star<1){
+      ctx.globalAlpha=pose.opacity*pose.morph*(1-pose.star);drawButterfly(ctx,f,t);
     }
     if(pose.star>0){
       const star=starAppearance(f,skyTime),compensation=1/(VIEW.scale*PLACEMENT.scale*pose.scale);
+      // 星芒独立于暗星底色，形成清楚的金白光芒，随后平滑收回。
+      ctx.globalAlpha=pose.opacity*pose.star;
+      drawGlint(ctx,0,0,star.twinkle,pose.scale);
       ctx.save();ctx.scale(compensation,compensation);ctx.globalAlpha=pose.opacity*pose.star*star.alpha;
       ctx.fillStyle=f.starRank%3===0?'#fff0d1':'#eef3ff';
       ctx.beginPath();ctx.ellipse(0,0,star.radius,star.radius,0,0,Math.PI*2);ctx.fill();
-      if(star.bright||star.twinkle>.05){
-        ctx.globalAlpha*=star.bright?.35:.65*star.twinkle;ctx.strokeStyle='#fff7df';ctx.lineWidth=.55;ctx.beginPath();
+      if(star.bright){
+        ctx.globalAlpha*=.35;ctx.strokeStyle='#fff7df';ctx.lineWidth=.55;ctx.beginPath();
         ctx.moveTo(-star.radius*2.5,0);ctx.lineTo(star.radius*2.5,0);
-        ctx.moveTo(0,-star.radius*1.8);ctx.lineTo(0,star.radius*1.8);ctx.stroke();
+        ctx.moveTo(0,-star.radius*2.5);ctx.lineTo(0,star.radius*2.5);ctx.stroke();
       }
       ctx.restore();
     }
-    const flap=butterflySpread(f,t),n=f.wingSize*.64;
+    const wing=butterflyWing(f,t,1),n=f.wingSize*.64;
     ctx.globalAlpha=pose.opacity;
-    // 光点随花瓣过渡到蝶翼，不在化蝶的交接处一起淡没。
-    drawGlint(ctx,mix(f.size*.12*appearance.size,n*.65*flap,pose.morph)*(1-pose.star),
-      mix(-f.size*.16*appearance.size,-n*.3,pose.morph)*(1-pose.star),
-      appearance.glint*mix(1,.7+.3*flap,pose.morph)*(1-pose.star),pose.scale);
+    // 闪点跟随右翼表面翻转，化蝶后缩成局部反射，不盖住整只蝴蝶。
+    drawGlint(ctx,mix(f.size*.12*appearance.size,n*.65*wing.width,pose.morph)*(1-pose.star),
+      mix(-f.size*.16*appearance.size,n*(-.46+.65*wing.lift),pose.morph)*(1-pose.star),
+      appearance.glint*mix(1,.22+.36*wing.sheen,pose.morph)*(1-pose.star),pose.scale,mix(1,.48,pose.morph));
     ctx.restore();
   }
   function buildCanopy(){

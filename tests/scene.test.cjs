@@ -25,7 +25,7 @@ vm.createContext(sandbox);
 vm.runInContext(fs.readFileSync(path.join(root,'tree-data.js'),'utf8'),sandbox);
 vm.runInContext(fs.readFileSync(path.join(root,'moon-map.js'),'utf8'),sandbox);
 const source=fs.readFileSync(path.join(root,'scene.js'),'utf8');
-vm.runInContext(source.replace('new p5(p=>{','globalThis.model={curve,branchProgress,leafProgress,flowerProgress,flowerPose,fallingFlowers,toScreen,PLACEMENT,phaseAt,LEAF_START,LEAF_END,BLOOM_END,DURATION,TREE_END,MORPH_TIME,WIND,windState,leafColor,visibleLeaves,moonArrivals,moonContribution,moonProgress,moonOutline,treeShake,attachedPoint,IMPACT,fallingAppearance,fallingSize,butterflySpread,flowingLight,reflectionCycle,lunarPixel,GLINT,VIEW,extraFlowers,canopyFlowers,starTiming,moonTravelers,insideMoon,starStops,starAppearance,grainPixel,soundStages};\nnew p5(p=>{').replace('  function render(t,skyTime=t){','  globalThis.drawSymbolForTest=drawFallingSymbol;\n  function render(t,skyTime=t){globalThis.skyTimeForTest=skyTime;'),sandbox);
+vm.runInContext(source.replace('new p5(p=>{','globalThis.model={curve,branchProgress,leafProgress,flowerProgress,flowerPose,fallingFlowers,toScreen,PLACEMENT,phaseAt,LEAF_START,LEAF_END,BLOOM_END,DURATION,TREE_END,MORPH_TIME,WIND,windState,leafColor,visibleLeaves,moonArrivals,moonContribution,moonProgress,moonOutline,treeShake,attachedPoint,IMPACT,fallingAppearance,fallingSize,butterflySpread,butterflyWing,flowingLight,reflectionCycle,lunarPixel,GLINT,VIEW,extraFlowers,canopyFlowers,starTiming,moonTravelers,insideMoon,starStops,starAppearance,grainPixel,soundStages};\nnew p5(p=>{').replace('  function render(t,skyTime=t){','  globalThis.drawSymbolForTest=drawFallingSymbol;\n  function render(t,skyTime=t){globalThis.skyTimeForTest=skyTime;'),sandbox);
 const {branches,leaves,flowers,moon}=sandbox.NightTreeData,m=sandbox.model;
 assert.equal(branches.length,2017);assert.equal(leaves.length,4042);assert.equal(flowers.length,4202);
 const original={
@@ -67,6 +67,8 @@ for(const f of m.fallingFlowers)for(let t=f.release;t<=24;t+=.1){
 }
 assert.equal(m.PLACEMENT.scale,.6);
 assert.equal(m.WIND.start,m.BLOOM_END,'花开完即起风，没有额外等待');
+assert(m.canopyFlowers.some(f=>m.flowerProgress(f,m.LEAF_END+1/30)>0),'叶片长完的下一帧即出现花苞');
+assert(m.canopyFlowers.some(f=>m.flowerProgress(f,m.LEAF_END+.3)>.22),'叶片完成后紧接着展开花瓣');
 assert(m.IMPACT.start-m.BLOOM_END<.2,'起风后立即带动树梢和落花');
 assert(m.GLINT.radius>=20&&m.GLINT.core<=1&&m.GLINT.width<1,'白色亮核小而尖，光芒细长');
 assert(m.GLINT.fadeAt+m.GLINT.fade<.3&&m.GLINT.fadeAt-m.GLINT.attack>=.04,'强峰短促，保留至少一帧峰值并渐退');
@@ -89,8 +91,15 @@ for(const b of branches){
   if(b.parent>=0){const parent=branches[b.parent];assert.equal(b.x,parent.ex);assert.equal(b.y,parent.ey);assert(b.start>=parent.start+parent.duration-.00002);}
   for(let t=0;t<=1;t+=.1){const q=m.toScreen(m.curve(b,t));assert(q.x>0&&q.x<450&&q.y>290&&q.y<=771,'完整树应置于左下方');}
 }
-assert(branches.some(b=>m.branchProgress(b,m.LEAF_START)<1),'叶片应在树枝接近长成时开始出现');
+assert(branches.some(b=>m.branchProgress(b,m.LEAF_START)<1),'叶片应在枝条仍生长时开始出现');
+for(const t of [1.2,1.6,2]){
+  assert(m.visibleLeaves.some(leaf=>m.leafProgress(leaf,t)>0),'树生长途中已有叶片展开');
+  assert(branches.some(b=>m.branchProgress(b,t)<1),'长叶时树枝仍在延伸');
+}
 for(const leaf of leaves){
+  const branch=branches[leaf.branch],arrival=branch.start+branch.duration*leaf.at;
+  assert.equal(m.leafProgress(leaf,arrival-1e-6),0,'枝条到达叶柄之前不出现叶片');
+  assert(Math.abs(m.leafProgress(leaf,arrival+leaf.duration/2)-.5)<1e-10,'叶片紧随枝条展开');
   const anchor=m.curve(branches[leaf.branch],leaf.at);
   assert(Math.hypot(anchor.x-leaf.x,anchor.y-leaf.y)<.00003);
   assert.equal(m.leafProgress(leaf,m.LEAF_START),0);assert.equal(m.leafProgress(leaf,m.LEAF_END),1);
@@ -159,6 +168,13 @@ for(const f of m.fallingFlowers){
   for(let t=f.morphAt;t<=f.morphAt+m.MORPH_TIME;t+=.02)assert.equal(m.butterflySpread(f,t),.84);
   const edge=f.morphAt+m.MORPH_TIME;
   assert(Math.abs(m.butterflySpread(f,edge-.00001)-m.butterflySpread(f,edge+.00001))<1e-6,'化蝶后振翅平滑衔接');
+  for(const side of [-1,1]){
+    assert.equal(m.butterflyWing(f,edge,side).width,.84,'展开蝶翼仍匹配掉落物尺寸');
+    const before=m.butterflyWing(f,edge-1e-5,side),after=m.butterflyWing(f,edge+1e-5,side);
+    for(const key of ['width','lift','sheen'])assert(Math.abs(before[key]-after[key])<1e-6,'翅面翻转与受光在化形结束时连续');
+    const saved=JSON.stringify(m.butterflyWing(f,edge+1,side));m.butterflyWing(f,24,side);
+    assert.equal(JSON.stringify(m.butterflyWing(f,edge+1,side)),saved,'翅面受光暂停与回拖一致');
+  }
   let previous=m.fallingAppearance(f,f.release),peak=0;
   for(let age=.001;age<2.5;age+=.001){
     const next=m.fallingAppearance(f,f.release+age);
@@ -319,13 +335,14 @@ const grainColors=[];
 for(let y=0;y<64;y++)for(let x=0;x<64;x++)grainColors.push(m.grainPixel(x,y));
 for(let channel=0;channel<3;channel++){
   const mean=grainColors.reduce((sum,p)=>sum+p[channel],0)/grainColors.length;
-  assert(Math.abs(mean-[36,79,241][channel])<.4,'磨砂底色接近参考图取样');
+  assert(Math.abs(mean-[25,28,34][channel])<.2,'磨砂底色为略带冷色的炭灰');
 }
-assert(new Set(grainColors.map(p=>p[0])).size>10,'背景有细颗粒');
+assert(new Set(grainColors.map(p=>p[0])).size>3,'背景保留细颗粒');
+for(const pixel of grainColors)assert(pixel[0]>=22&&pixel[0]<=28&&pixel[1]-pixel[0]===3&&pixel[2]-pixel[0]===9,'颗粒明暗轻微，不产生彩色噪点');
 const grainSample=JSON.stringify(m.grainPixel(38,90));m.grainPixel(129,34);
 assert.equal(JSON.stringify(m.grainPixel(38,90)),grainSample,'磨砂颗粒固定，不随播放跳动');
 assert(!/create(?:Linear|Radial)Gradient/.test(source.split('function buildBackground(){')[1].split('function buildMoon')[0]),'背景没有渐变或雾层');
-assert(/\.painting\{[^}]*background:#244ff1/.test(css),'主场景使用参考图的宝蓝底色');
+assert(/\.painting\{[^}]*background:#191c22/.test(css),'主场景与画布使用相同炭灰底色');
 assert.equal(textureWrites,2,'月面与磨砂背景各生成一次，播放和回拖不重建');
 assert.equal(new Set(m.fallingFlowers.map(f=>f.kind)).size,3);
 assert.equal(m.fallingFlowers.filter(f=>f.kind==='leaf').length,37);
@@ -387,10 +404,13 @@ for(let i=0;i<m.starStops.length;i++){
 reduced=false;
 let changing=0,maxTwinkling=0;
 for(const f of stopped){
-  const samples=Array.from({length:121},(_,i)=>m.starAppearance(f,24+i*.1));
+  const samples=Array.from({length:721},(_,i)=>m.starAppearance(f,24+i/60));
   const alpha=samples.map(v=>v.alpha);
-  if(Math.max(...alpha)-Math.min(...alpha)>.01)changing++;
-  for(let i=1;i<samples.length;i++)assert(Math.abs(samples[i].alpha-samples[i-1].alpha)<.13,'星光柔和明灭');
+  if(Math.max(...alpha)-Math.min(...alpha)>.01){
+    changing++;
+    assert(Math.max(...alpha)>.95&&Math.max(...alpha)-Math.min(...alpha)>.4,'局部星光的亮峰与明暗反差清楚可见');
+  }
+  for(let i=1;i<samples.length;i++)assert(Math.abs(samples[i].alpha-samples[i-1].alpha)<.06,'增强星光仍逐帧平滑明灭');
   const saved=JSON.stringify(m.starAppearance(f,28.4));m.starAppearance(f,60);
   assert.equal(JSON.stringify(m.starAppearance(f,28.4)),saved);
 }
@@ -404,5 +424,5 @@ for(const phase of [0,.05,.25,.5,.75,1]){
 }
 const seekPhase=m.moonProgress(18);m.moonProgress(24);m.moonProgress(0);assert.equal(m.moonProgress(18),seekPhase);
 assert.equal(m.moonProgress(0),0,'重播必须恢复无月夜空');
-console.log('通过：11 种掉落形态、空心通透与轮廓流光、流光移动及暂停重播一致、掉落物与化蝶尺寸匹配、化形后平滑振翅、掉落月牙与主月亮由缺至圆、疏密与明暗分层的星空、细磨砂蓝场景、暖金月面纹理与一次缓存、三种放大掉落物、28 蝶途中停驻化星、84 蝶实际入月与月相分流、独立三比四取景与外置控件、新增 1470 朵叶腋金花及间距、从右上往左下偏动与树干幅度、落花平滑放大、短促反光连续性与固定节奏、反光数量控制、原桂花完整结构与时序、左下等比缩放、银色叶片与分层疏叶、112 个真实落花来源、短促震动同步落花、离枝衔接、蝶群交错转向、落花化蝶连续性、抵月消融驱动月牙变圆、月相连续与重播复位、49 个进度位置、缓存、暂停重播、后台停播、减少动态效果及本地资源。');
+console.log('通过：11 种掉落形态、空心通透与轮廓流光、流光移动及暂停重播一致、掉落物与化蝶尺寸匹配、化形后平滑振翅、掉落月牙与主月亮由缺至圆、疏密与明暗分层的星空、细磨砂炭灰场景、暖金月面纹理与一次缓存、三种放大掉落物、28 蝶途中停驻化星、84 蝶实际入月与月相分流、独立三比四取景与外置控件、新增 1470 朵叶腋金花及间距、从右上往左下偏动与树干幅度、落花平滑放大、短促反光连续性与固定节奏、反光数量控制、原桂花完整结构与时序、左下等比缩放、银色叶片与分层疏叶、112 个真实落花来源、短促震动同步落花、离枝衔接、蝶群交错转向、落花化蝶连续性、抵月消融驱动月牙变圆、月相连续与重播复位、49 个进度位置、缓存、暂停重播、后台停播、减少动态效果及本地资源。');
 console.log('未启动服务器、操作浏览器或截图；视觉效果由人工刷新验收。');

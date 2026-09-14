@@ -43,12 +43,12 @@ let crossings=0;for(let i=32001;i<35200;i++)if(bell[i]*bell[i-1]<0)crossings++;
 assert(crossings/3199>.09,'主要碰撞声保留高频清脆成分');
 const repeated=box.synthesize(3,{start:4,end:5},[{time:1,pan:0}]);
 assert.deepEqual(repeated.left,bell,'摩擦和敲击随机细节在回放时保持一致');
-const stages={wood:{start:0,end:2.7},leaves:{start:2.35,end:3.65},
+const stages={wood:{start:0,end:2.7},leaves:{start:.9503908852462634,end:2.890855697532442},
   blooms:[{time:4.2,pan:-.4}],flights:[{start:10,end:20,phase:1,panFrom:-.6,panTo:.65}],
   stars:[{first:18.45,period:4,pan:.4,note:2}]};
 const full=box.synthesize(24,settings.wind,settings.cues,32000,stages);
 const fullPower=(from,to)=>{let sum=0;for(let i=Math.floor(from*32000);i<to*32000;i++)sum+=full.left[i]**2;return sum/((to-from)*32000);};
-for(const [from,to] of [[.4,.9],[2.9,3.3],[4.2,4.4],[15,16]])assert(fullPower(from,to)>.000001,'生长、叶片、开花与飞行各有声音');
+for(const [from,to] of [[.4,.9],[2.72,2.8],[4.2,4.4],[15,16]])assert(fullPower(from,to)>.000001,'生长、叶片、开花与飞行各有声音');
 assert.equal(fullPower(22,24),0,'星光使用独立轻响，不重放主体音轨');
 const fullAudio=box.NightTreeSound.create({...settings,stages});fullAudio.play(18.4);
 const mainVoice=sources.at(-1),beforeStar=sources.length;
