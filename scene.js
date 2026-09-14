@@ -23,7 +23,8 @@ const FLOWER_OFFSET=LEAF_END-Math.min(...flowers.map(f=>f.budAt));
 const BLOOM_END=Math.max(...flowers.map(f=>f.start+f.duration))+FLOWER_OFFSET;
 // 只改变整棵树的显示位置和比例，内部坐标、枝叶尺寸比例与生长时间不变。
 const PLACEMENT={scale:.6,x:225,y:770,rootX:360,rootY:745};
-const GROUND_Y=PLACEMENT.y,CONTACT_TIME=.08;
+// 重力使用取景像素 / 秒²；同一种弹性使回弹高度只随实际落差变化。
+const GROUND_Y=PLACEMENT.y,GRAVITY=300,RESTITUTION=.46;
 const toScreen=q=>({x:(q.x-PLACEMENT.rootX)*PLACEMENT.scale+PLACEMENT.x,y:(q.y-PLACEMENT.rootY)*PLACEMENT.scale+PLACEMENT.y});
 const targetMoon={x:(moon.x-PLACEMENT.x)/PLACEMENT.scale+PLACEMENT.rootX,y:(moon.y-PLACEMENT.y)/PLACEMENT.scale+PLACEMENT.rootY};
 const clamp=x=>Math.max(0,Math.min(1,x));
@@ -162,26 +163,43 @@ function groundOffset(f,angle){
   if(f.kind==='leaf')bottom=Math.max(bottom,r*1.15*cos+.225,-r*.85*cos+.225);
   return bottom*fallingSize(f);
 }
+function fallPhysics(f,origin){
+  const height=GROUND_Y-toScreen(origin).y;
+  let fallDuration=Math.sqrt(2*height/GRAVITY);
+  // 触地角度影响轮廓底边；先求接触时刻，再把同一落差用于撞击与回弹。
+  for(let i=0;i<10;i++){
+    const radius=groundOffset(f,f.rotation+fallDuration*.7)*PLACEMENT.scale;
+    fallDuration=Math.sqrt(2*Math.max(0,height-radius)/GRAVITY);
+  }
+  const groundRadius=groundOffset(f,f.rotation+fallDuration*.7);
+  const dropHeight=height-groundRadius*PLACEMENT.scale;
+  const impactSpeed=GRAVITY*fallDuration,reboundSpeed=impactSpeed*RESTITUTION;
+  return {fallDuration,groundRadius,dropHeight,impactSpeed,reboundSpeed,
+    bounceDuration:reboundSpeed/GRAVITY,
+    bounceHeight:reboundSpeed*reboundSpeed/(2*GRAVITY*PLACEMENT.scale)};
+}
 // 从枝叶间落下月牙、星星和银叶副本，原树保持茂盛。
 const fallingFlowers=Array.from({length:112},(_,i)=>{
   const sourceIndex=(i*37)%flowers.length,original=flowers[sourceIndex],kind=['moon','star','leaf'][i%3];
   const variantIndex=Math.floor(i/3);
   const symbolStyle=kind==='star'?['five-solid','five-outline','four-solid','four-outline','cross','cross-diagonal'][variantIndex%6]
     :kind==='moon'?['crescent-solid','crescent-outline','slim-solid','slim-outline'][variantIndex%4]:'leaf-solid';
+  // 形状与金银材质分开分配，同一轮廓在下一轮切换颜色。
+  const styleCount=kind==='star'?6:kind==='moon'?4:1;
+  const metal=(Math.floor(variantIndex/styleCount)+variantIndex%styleCount)%2?'silver':'gold';
   const sourceLeaf=kind==='leaf'?visibleLeaves.reduce((best,l)=>
     Math.hypot(l.x-original.x,l.y-original.y)<Math.hypot(best.x-original.x,best.y-original.y)?l:best):null;
   const f={...original,...(sourceLeaf?{x:sourceLeaf.x,y:sourceLeaf.y}:{} ),kind,symbolStyle,wingSize:13+(i%5)};
   const release=IMPACT.start+i/111*3.3,windAt=release,origin=attachedPoint(f,release),source=toScreen(origin);
-  const fallDuration=Math.sqrt(2*(GROUND_Y-source.y)/300),contactAt=release+fallDuration;
-  const bounceAt=contactAt+CONTACT_TIME,bounceDuration=.34+(i%4)*.035,morphAt=bounceAt+bounceDuration;
-  const impactAngle=f.rotation+fallDuration*.7,groundRadius=groundOffset(f,impactAngle);
+  const physics=fallPhysics(f,origin),{fallDuration,groundRadius,bounceDuration}=physics;
+  const contactAt=release+fallDuration,bounceAt=contactAt,morphAt=bounceAt+bounceDuration;
   const force=windState((windAt+contactAt)/2,source.x,(source.y+GROUND_Y)/2).strength;
   const drift=Math.max(0,Math.min((toScreen(origin).x-22)/PLACEMENT.scale,105*(.3+.7*force)));
   const end={x:origin.x-drift,y:(GROUND_Y-PLACEMENT.y)/PLACEMENT.scale+PLACEMENT.rootY-groundRadius};
   const sweep=Math.min(32,Math.max(2,(toScreen(end).x-10)/PLACEMENT.scale*.3));
-  return {...f,sourceIndex,kind,symbolStyle,sourceLeaf:sourceLeaf?.sourceIndex??null,destination:i%4===0?'star':'moon',
-    starRank:Math.floor(i/4),stopFraction:.5+((i*73)%113)/113*.32,release,color:i%4,wingSize:13+(i%5),origin,end,fallDuration,morphAt,windAt,drift,sweep,
-    contactAt,bounceAt,bounceDuration,groundRadius,bounceHeight:(24+(i%5)*4)/PLACEMENT.scale,
+  return {...f,sourceIndex,kind,symbolStyle,metal,sourceLeaf:sourceLeaf?.sourceIndex??null,destination:i%4===0?'star':'moon',
+    starRank:Math.floor(i/4),stopFraction:.5+((i*73)%113)/113*.32,release,color:i%4,wingSize:13+(i%5),origin,end,morphAt,windAt,drift,sweep,
+    ...physics,contactAt,bounceAt,
     carryDuration:.6+(i%9)*.095,flightDuration:4.5+(i%11)*.16};
 });
 function starTiming(f){
@@ -200,13 +218,14 @@ function flowerMotion(f,time){
   const age=time-f.release;
   if(age<0)return{x:f.origin.x,y:f.origin.y,angle:f.rotation,morph:0,scale:1,opacity:0,flight:0};
   // 尚未化蝶时，风已改变落花的横向方向；所有偏移从零平滑开始。
-  const falling=clamp(age/f.fallDuration);
+  const fallTime=Math.min(age,f.fallDuration),falling=fallTime/f.fallDuration;
   let q={x:f.origin.x-f.drift*smooth(falling),
-    y:mix(f.origin.y,f.end.y,falling*falling)},flight=0;
+    y:f.origin.y+.5*GRAVITY*fallTime*fallTime/PLACEMENT.scale},flight=0;
   if(time>=f.contactAt)q={...f.end};
   if(time>=f.bounceAt){
-    const bounce=clamp((time-f.bounceAt)/f.bounceDuration);
-    q={x:f.end.x+f.sweep*.35*smooth(bounce),y:f.end.y-f.bounceHeight*(2*bounce-bounce*bounce)};
+    const riseTime=Math.min(time-f.bounceAt,f.bounceDuration),bounce=riseTime/f.bounceDuration;
+    q={x:f.end.x+f.sweep*.35*smooth(bounce),
+      y:f.end.y-(f.reboundSpeed*riseTime-.5*GRAVITY*riseTime*riseTime)/PLACEMENT.scale};
   }
   const morphAge=time-f.morphAt,morph=smooth(morphAge/MORPH_TIME);
   const apex={x:f.end.x+f.sweep*.35,y:f.end.y-f.bounceHeight};
@@ -767,25 +786,25 @@ new p5(p=>{
     const head=(flow.position+1.7)/3.4*travel,stroke=Math.max(.7,r*.16);
     ctx.save();if(!outline)ctx.clip();
     // 银叶按主脉分流；月牙与星形按轮廓切线前进，空心款的亮纹始终落在描边里。
-    const width=outline?stroke*.85:r*.16;
+    const width=outline?stroke*.85:r*.16,silver=f.metal==='silver';
     strokeField(ctx,paths,head,flow.alpha,outline?r-stroke*.5:r,f.kind==='leaf'?'leaf':'flower',tail,
-      [[width,f.kind==='leaf'?'#dceaff':'#ffd45c',.7],[width*.45,f.kind==='leaf'?'#ffffff':'#fff4c4',1]]);
+      [[width,silver?'#dceaff':'#ffd45c',.7],[width*.45,silver?'#ffffff':'#fff4c4',1]]);
     ctx.restore();
   }
   function drawFallingSymbol(ctx,f,t){
-    const r=f.size*.55,outline=f.symbolStyle.endsWith('outline');
+    const r=f.size*.55,outline=f.symbolStyle.endsWith('outline'),silver=f.metal==='silver';
     ctx.save();if(f.symbolStyle==='cross-diagonal')ctx.rotate(Math.PI/4);
     const fill=ctx.createLinearGradient(-r,r,r,-r);
-    fill.addColorStop(0,f.kind==='leaf'?'#7f8c9e':'#af7929');
-    fill.addColorStop(.45,f.kind==='leaf'?'#d4d8d2':'#f4bd46');
-    fill.addColorStop(.72,f.kind==='leaf'?'#fff8e6':'#ffe5a0');
-    fill.addColorStop(1,f.kind==='leaf'?'#acb6bd':'#dca847');
+    fill.addColorStop(0,silver?'#7f8c9e':'#af7929');
+    fill.addColorStop(.45,silver?'#d4d8d2':'#f4bd46');
+    fill.addColorStop(.72,silver?'#fff8e6':'#ffe5a0');
+    fill.addColorStop(1,silver?'#acb6bd':'#dca847');
     ctx.fillStyle=fill;ctx.strokeStyle=fill;ctx.lineWidth=Math.max(.7,r*.16);ctx.lineJoin='round';
     // 描边向两侧扩张，略缩空心轮廓以保持与实心款相近的外尺寸。
     symbolPath(ctx,f,outline?r-ctx.lineWidth*.5:r);
     if(outline)ctx.stroke();else ctx.fill();
     if(f.kind==='leaf'){
-      ctx.strokeStyle='#8295ad';ctx.lineWidth=.45;ctx.beginPath();ctx.moveTo(0,r*1.15);
+      ctx.strokeStyle=silver?'#8295ad':'#997333';ctx.lineWidth=.45;ctx.beginPath();ctx.moveTo(0,r*1.15);
       ctx.quadraticCurveTo(r*.12,0,0,-r*.85);ctx.stroke();
       symbolPath(ctx,f,r);
     }
@@ -799,7 +818,8 @@ new p5(p=>{
     ctx.save();ctx.translate(f.end.x,(GROUND_Y-PLACEMENT.y)/PLACEMENT.scale+PLACEMENT.rootY);ctx.scale(1,.19);
     ctx.globalAlpha*=amount*.28;const radius=f.wingSize*.6;
     const contact=ctx.createRadialGradient(0,0,0,0,0,radius);
-    contact.addColorStop(0,f.kind==='leaf'?'#e8edf2':'#f7df9e');contact.addColorStop(1,'rgba(247,223,158,0)');
+    contact.addColorStop(0,f.metal==='silver'?'#e8edf2':'#f7df9e');
+    contact.addColorStop(1,f.metal==='silver'?'rgba(232,237,242,0)':'rgba(247,223,158,0)');
     ctx.fillStyle=contact;ctx.beginPath();ctx.arc(0,0,radius,0,Math.PI*2);ctx.fill();ctx.restore();
   }
   function drawFlyingFlower(f,t,skyTime=t){
@@ -855,7 +875,7 @@ new p5(p=>{
     }
     for(const f of fallingFlowers){
       const r=f.size*.55,n=f.wingSize*.64,outline=f.symbolStyle.endsWith('outline');
-      const symbol=add([-r*2.1,-r*2.1,r*4.2,r*4.2],f.kind==='leaf'?0:1,15,.3,ctx=>{
+      const symbol=add([-r*2.1,-r*2.1,r*4.2,r*4.2],f.metal==='silver'?0:1,15,.3,ctx=>{
         ctx.lineWidth=Math.max(.7,r*.16);ctx.lineJoin='round';
         symbolPath(ctx,f,outline?r-ctx.lineWidth*.5:r);if(outline)ctx.stroke();else ctx.fill();
       });

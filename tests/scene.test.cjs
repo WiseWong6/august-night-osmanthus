@@ -38,7 +38,7 @@ vm.createContext(sandbox);
 vm.runInContext(fs.readFileSync(path.join(root,'tree-data.js'),'utf8'),sandbox);
 vm.runInContext(fs.readFileSync(path.join(root,'moon-map.js'),'utf8'),sandbox);
 const source=fs.readFileSync(path.join(root,'scene.js'),'utf8');
-vm.runInContext(source.replace('new p5(p=>{','globalThis.model={curve,branchProgress,leafProgress,flowerProgress,flowerPose,fallingFlowers,toScreen,PLACEMENT,phaseAt,LEAF_START,LEAF_END,BLOOM_END,DURATION,TREE_END,MORPH_TIME,WIND,windState,leafColor,visibleLeaves,moonArrivals,moonContribution,moonProgress,moonOutline,treeShake,attachedPoint,IMPACT,fallingAppearance,fallingSize,butterflySpread,butterflyWing,flowingLight,reflectionCycle,lunarPixel,GLINT,VIEW,GROUND_Y,CONTACT_TIME,extraFlowers,canopyFlowers,starTiming,moonTravelers,insideMoon,starStops,starAppearance,grainPixel,soundStages,surfaceLights,surfaceVector,surfaceLight,fallingSurfacePaths,canopyGlitter};\nnew p5(p=>{').replace('  function render(t,skyTime=t){','  globalThis.drawSymbolForTest=drawFallingSymbol;globalThis.drawSurfaceForTest=drawSurfaceLight;globalThis.drawGlitterForTest=drawGlitterFlower;globalThis.prepareGlitterForTest=prepareGlitter;\n  function render(t,skyTime=t){globalThis.skyTimeForTest=skyTime;'),sandbox);
+vm.runInContext(source.replace('new p5(p=>{','globalThis.model={curve,branchProgress,leafProgress,flowerProgress,flowerPose,fallingFlowers,toScreen,PLACEMENT,phaseAt,LEAF_START,LEAF_END,BLOOM_END,DURATION,TREE_END,MORPH_TIME,WIND,windState,leafColor,visibleLeaves,moonArrivals,moonContribution,moonProgress,moonOutline,treeShake,attachedPoint,IMPACT,fallingAppearance,fallingSize,butterflySpread,butterflyWing,flowingLight,reflectionCycle,lunarPixel,GLINT,VIEW,GROUND_Y,GRAVITY,RESTITUTION,fallPhysics,groundOffset,extraFlowers,canopyFlowers,starTiming,moonTravelers,insideMoon,starStops,starAppearance,grainPixel,soundStages,surfaceLights,surfaceVector,surfaceLight,fallingSurfacePaths,canopyGlitter};\nnew p5(p=>{').replace('  function render(t,skyTime=t){','  globalThis.drawSymbolForTest=drawFallingSymbol;globalThis.drawSurfaceForTest=drawSurfaceLight;globalThis.drawGlitterForTest=drawGlitterFlower;globalThis.prepareGlitterForTest=prepareGlitter;\n  function render(t,skyTime=t){globalThis.skyTimeForTest=skyTime;'),sandbox);
 const {branches,leaves,flowers,moon}=sandbox.NightTreeData,m=sandbox.model;
 assert.equal(branches.length,2017);assert.equal(leaves.length,4042);assert.equal(flowers.length,4202);
 const original={
@@ -126,6 +126,9 @@ for(const f of flowers){
 assert.equal(m.fallingFlowers.length,112);assert.equal(new Set(m.fallingFlowers.map(f=>f.sourceIndex)).size,112);
 for(const f of m.fallingFlowers){
   const original=flowers[f.sourceIndex],anchor=f.kind==='leaf'?leaves.find(l=>l.sourceIndex===f.sourceLeaf):original;
+  const index=m.fallingFlowers.indexOf(f);
+  assert.equal(f.carryDuration,.6+(index%9)*.095,'下落和回弹调整不能缩短原起飞时长');
+  assert.equal(f.flightDuration,4.5+(index%11)*.16,'保持原赴月飞行时长');
   assert(anchor);assert.equal(f.x,anchor.x);assert.equal(f.y,anchor.y);assert.equal(f.size,original.size);
   assert(f.release>=m.IMPACT.start&&f.release<=m.IMPACT.start+3.30001);
   assert(f.windAt-f.release<=.21,'离枝约 0.2 秒即开始受风，不等落到指定区域');
@@ -136,7 +139,7 @@ for(const f of m.fallingFlowers){
   assert(drifting.x<f.origin.x&&drifting.y>f.origin.y&&drifting.morph===0,'未到化蝶位置的桂花已向左下偏移');
   const release=m.flowerPose(f,f.release);assert.equal(release.x,m.attachedPoint(f,f.release).x);assert.equal(release.y,m.attachedPoint(f,f.release).y);assert.equal(release.morph,0);
   assert.equal(f.contactAt,f.release+f.fallDuration);
-  assert.equal(f.bounceAt,f.contactAt+m.CONTACT_TIME);
+  assert.equal(f.bounceAt,f.contactAt,'碰撞后立即反弹，不统一停顿');
   assert.equal(f.morphAt,f.bounceAt+f.bounceDuration);
   const landing=m.toScreen(m.flowerPose(f,f.contactAt));
   assert(Math.abs(landing.y+f.groundRadius*m.PLACEMENT.scale-m.GROUND_Y)<1e-10,'各个轮廓的底边必须触及树根高度的地面');
@@ -162,7 +165,7 @@ for(const f of m.fallingFlowers){
   }
   const eps=.00001;
   assert(m.flowerPose(f,f.contactAt-.01).y<f.end.y,'触地前仍向地面下降');
-  assert.equal(m.flowerPose(f,f.contactAt+m.CONTACT_TIME*.5).y,f.end.y,'触地后短暂停留，不穿过地面');
+  assert(m.flowerPose(f,f.contactAt+.01).y<f.end.y,'触地后立即离地，不悬停或穿地');
   for(const edge of [f.morphAt,f.morphAt+m.MORPH_TIME,f.morphAt+m.MORPH_TIME+f.carryDuration]){
     const before=m.flowerPose(f,edge-eps),at=m.flowerPose(f,edge),after=m.flowerPose(f,edge+eps);
     for(const key of ['x','y'])assert(Math.abs((at[key]-before[key])/eps-(after[key]-at[key])/eps)<.03,'反弹、化蝶与飞行平滑接续');
@@ -180,6 +183,41 @@ for(const f of m.fallingFlowers){
     assert(Math.hypot(q.x-moon.x,q.y-moon.y)>moon.r+30,'途中星星不应被算入月面');
   }
 }
+// 从实际画面轨迹测量速度和加速度，避免只验证预先写入的物理参数。
+const measuredBounces=[];
+for(const f of m.fallingFlowers){
+  const y=t=>m.toScreen(m.flowerPose(f,t)).y,eps=1e-5;
+  const height=y(f.contactAt)-y(f.release);
+  const incoming=(y(f.contactAt)-y(f.contactAt-eps))/eps;
+  const outgoing=(y(f.contactAt)-y(f.contactAt+eps))/eps;
+  const rebound=y(f.contactAt)-y(f.morphAt);
+  assert(Math.abs(incoming-Math.sqrt(2*m.GRAVITY*height))<.005,'更高的落差必须产生更高的触地速度');
+  assert(Math.abs(outgoing/incoming-m.RESTITUTION)<1e-5,'碰撞损失由相同弹性决定，不按下标轮换');
+  assert(Math.abs(rebound/height-m.RESTITUTION**2)<1e-10,'回弹高度与落差成比例，碰撞后不能凭空增能');
+  assert(Math.abs(height-f.dropHeight)<1e-10);
+  for(const [start,duration] of [[f.release,f.fallDuration],[f.bounceAt,f.bounceDuration]]){
+    const middle=start+duration*.5,dt=duration*.2;
+    const acceleration=(y(middle+dt)-2*y(middle)+y(middle-dt))/(dt*dt);
+    assert(Math.abs(acceleration-m.GRAVITY)<1e-7,'下落和回弹使用同一向下重力');
+  }
+  assert(Math.abs(m.groundOffset(f,m.flowerPose(f,f.contactAt).angle)-f.groundRadius)<1e-10,'按实际触地角度测量轮廓');
+  const saved=JSON.stringify(m.flowerPose(f,f.contactAt-.12));
+  m.flowerPose(f,24);m.flowerPose(f,0);
+  assert.equal(JSON.stringify(m.flowerPose(f,f.contactAt-.12)),saved,'回拖后下落速度和位置可复现');
+  measuredBounces.push({height,incoming,rebound,duration:f.bounceDuration});
+}
+measuredBounces.sort((a,b)=>a.height-b.height);
+for(let i=1;i<measuredBounces.length;i++){
+  const low=measuredBounces[i-1],high=measuredBounces[i];
+  assert(high.incoming>low.incoming&&high.rebound>low.rebound&&high.duration>low.duration,'高处落下的物体更快撞地、弹得更高，上升时间更长');
+}
+assert(measuredBounces.at(-1).rebound/measuredBounces[0].rebound>2,'树冠不同高度应产生明显的回弹差异');
+// 对同一个物体单独改变释放高度，排除形状、大小或序号造成的假差异。
+const specimen=m.fallingFlowers[0],low=m.fallPhysics(specimen,{x:specimen.origin.x,y:645});
+const high=m.fallPhysics(specimen,{x:specimen.origin.x,y:145});
+assert(high.fallDuration>low.fallDuration&&high.impactSpeed>low.impactSpeed&&high.bounceHeight>low.bounceHeight);
+assert(Math.abs(high.bounceHeight/low.bounceHeight-high.dropHeight/low.dropHeight)<1e-10);
+console.log('通过：同一重力下加速下落、按真实落差计算触地速度、弹性碰撞与回弹高度、接触即回弹，以及回拖复现。');
 // 离枝尺寸平滑变化，亮核快亮慢退；随机相位不能随播放改变。
 let maxGlints=0;
 for(const f of m.fallingFlowers){
@@ -276,8 +314,9 @@ for(let t=m.IMPACT.start;t<=m.IMPACT.start+m.IMPACT.duration;t+=.005){
 assert(largest>.004&&largest<.014,'只有一次轻微、可见的短促震动');
 const styles=new Set(m.fallingFlowers.map(f=>f.symbolStyle));
 for(const name of ['five-solid','five-outline','four-solid','four-outline','cross','cross-diagonal','crescent-solid','crescent-outline','slim-solid','slim-outline','leaf-solid'])assert(styles.has(name));
-for(const style of styles){
-  const f=m.fallingFlowers.find(f=>f.symbolStyle===style);
+for(const style of styles)for(const metal of ['gold','silver']){
+  const f=m.fallingFlowers.find(f=>f.symbolStyle===style&&f.metal===metal);
+  assert(f,'每种星形、月牙与树叶轮廓都应同时具有金银两种材质');
   capture=[];sandbox.drawSymbolForTest(context(),f,f.release+.65);
   if(style.endsWith('outline')){
     assert(!capture.includes('fill'),'空心形态及其流光不能填充中间');
@@ -323,7 +362,7 @@ for(const light of m.canopyGlitter){
 }
 for(const [i,f] of m.fallingFlowers.entries()){
   const slot=m.canopyGlitter.length+i*5,mask=glitterMasks[slot];
-  assert.equal(glitterSurfaces[slot].gold,f.kind==='leaf'?0:1);
+  assert.equal(glitterSurfaces[slot].gold,f.metal==='silver'?0:1,'反光颜色跟随材质，不跟随形状');
   if(f.symbolStyle.endsWith('outline'))assert(mask.some(call=>call[0]==='stroke')&&!mask.some(call=>call[0]==='fill'),'空心图形的反光来源只在描边');
   else assert(mask.some(call=>call[0]==='fill'));
   for(let wing=1;wing<=4;wing++){
