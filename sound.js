@@ -3,6 +3,7 @@
 (()=>{
   const clamp=x=>Math.max(0,Math.min(1,x));
   const smooth=x=>{x=clamp(x);return x*x*(3-2*x);};
+  const STAR_SOUND_DURATION=1.25;
   // 《风过之处》24.5～29 秒混合音轨的高频能量起伏，仅参考节奏，不复制原配乐。
   const grassReference=[.151,.154,.183,.244,.197,.183,.233,.212,.139,.138,.192,.217,.164,.164,.163,.141,.133,.122,.09,.088,.087,.114,.151,.227,.292,.318,.421,.433,.489,.543,.529,.565,.902,1,1,1,.366,.153,.215,.157,.149,.21,.17,.319,.353];
   function grassEnvelope(age){
@@ -65,18 +66,51 @@
     if(stages.wood)brush(stages.wood.start,stages.wood.end,.10,'wood');
     if(stages.leaves)brush(stages.leaves.start,stages.leaves.end,.075,'leaf');
     for(const f of stages.flights||[])brush(f.start,f.end,.029,'flight',f.phase,f.panFrom,f.panTo);
-    const shimmer=(event,i,star=false)=>{
-      const frequency=(star?[2637.02,3135.96,3520,2793.83,3951.07]:[1046.5,1318.51,1567.98,1760,2093])[i%5];
-      const start=Math.floor(event.time*rate),decay=star?.105:.16,count=Math.ceil(decay*6*rate);
+    // 参考《风过之处》结尾的中音区延展感；不截取混合配乐，另做无固定音高的舒展声。
+    const unfurl=(event,index)=>{
+      const span=event.duration??.38,start=Math.floor(event.time*rate),count=Math.ceil(span*rate);
+      const pan=Math.max(-.8,Math.min(.8,event.pan??0)),lg=Math.sqrt((1-pan)/2),rg=Math.sqrt((1+pan)/2);
+      const b=1-Math.exp(-2*Math.PI*180/rate),c=1-Math.exp(-2*Math.PI*2800/rate);
+      let seed=(Math.imul(index+1,2246822519)^73129)>>>0,body=0,velvet=0,low=0,air=0;
       for(let j=0;j<count&&start+j<length;j++){
-        const age=j/rate,envelope=(1-Math.exp(-age/.005))*Math.exp(-age/decay)*smooth((count-j)/(rate*.008));
-        const value=(Math.sin(2*Math.PI*frequency*age)+.16*Math.sin(2*Math.PI*frequency*3*age))
-          *envelope*(star?.035:.031);
-        left[start+j]+=value*Math.sqrt((1-event.pan)/2);right[start+j]+=value*Math.sqrt((1+event.pan)/2);
+        seed=(Math.imul(seed,1664525)+1013904223)>>>0;const n=seed/2147483648-1;
+        const u=j/(span*rate),a=1-Math.exp(-2*Math.PI*(720+(index%4)*90+360*smooth(u))/rate);
+        low+=(n-low)*b;body+=(n-low-body)*a;velvet+=(body-velvet)*a;air+=(n-low-air)*c;
+        const envelope=smooth(u/.42)*(1-smooth((u-.38)/.62));
+        const texture=velvet*.105+(air-body)*(.003+.003*u);
+        const value=texture*envelope;
+        if(start+j>=0){left[start+j]+=value*lg;right[start+j]+=value*rg;}
       }
     };
-    (stages.blooms||[]).forEach((event,i)=>shimmer(event,i));
-    (stages.sparkles||[]).forEach(event=>shimmer(event,event.note,true));
+    const shimmer=event=>{
+      // 小玻璃片的几组共振先后消散；细微尺寸差异代替逐颗播放音阶。
+      const index=event.note??0,frequency=1510*[1,1.048,.953,1.021,1.081,.978,1.064][index%7];
+      const start=Math.floor(event.time*rate),span=STAR_SOUND_DURATION-.1,count=Math.ceil(span*rate);
+      const pan=Math.max(-.8,Math.min(.8,event.pan??0)),lg=Math.sqrt((1-pan)/2),rg=Math.sqrt((1+pan)/2);
+      const modes=[[1,.42,.27],[1.414,.33,.18],[2.318,.23,.115],[3.73,.075,.072],[5.09,.022,.042]];
+      const dry=new Float32Array(count);
+      let seed=(Math.imul(index+1,3266489917)^9511)>>>0,edge=0,body=0;
+      for(let j=0;j<count;j++){
+        const age=j/rate;let tone=0;
+        for(const [ratio,weight,decay] of modes)tone+=weight*Math.sin(2*Math.PI*frequency*ratio*age)*Math.exp(-age/decay);
+        seed=(Math.imul(seed,1664525)+1013904223)>>>0;const n=seed/2147483648-1;
+        edge+=(n-edge)*.45;body+=(n-body)*.15;
+        const touch=(edge-body)*.045*Math.exp(-age/.018);
+        dry[j]=(tone+touch)*.054*smooth(age/.024)*smooth((span-age)/.2);
+      }
+      // 很轻的左右短反射让余韵散开，避免单频电子提示音与长串回声。
+      const taps=[[0,lg*.88,rg*.88],[.027,rg*.075,0],[.043,0,lg*.075],[.071,rg*.035,0],[.091,0,lg*.035]];
+      for(const [delay,l,r] of taps){
+        const offset=start+Math.round(delay*rate);let softened=0;
+        for(let j=0;j<count&&offset+j<length;j++){
+          softened+=(dry[j]-softened)*.38;
+          const value=delay?softened:dry[j];
+          if(offset+j>=0){left[offset+j]+=value*l;right[offset+j]+=value*r;}
+        }
+      }
+    };
+    (stages.blooms||[]).forEach(unfurl);
+    (stages.sparkles||[]).forEach(shimmer);
     let peak=0;for(let i=0;i<length;i++)peak=Math.max(peak,Math.abs(left[i]),Math.abs(right[i]));
     if(peak>.8)for(let i=0;i<length;i++){left[i]*=.8/peak;right[i]*=.8/peak;}
     return {left,right,rate};
@@ -113,7 +147,7 @@
       if(!Audio)throw new Error('此浏览器不支持音效');
       ctx=new Audio();master=ctx.createGain();master.gain.value=enabled?.8:0;master.connect(ctx.destination);
       buffer=makeBuffer(synthesize(duration,wind,cues,32000,stages));
-      starBuffers=(stages.stars||[]).map(star=>makeBuffer(synthesize(.65,{start:1,end:2},[],32000,
+      starBuffers=(stages.stars||[]).map(star=>makeBuffer(synthesize(STAR_SOUND_DURATION,{start:2,end:3},[],32000,
         {sparkles:[{time:0,pan:star.pan,note:star.note}]})));
     }
     return {

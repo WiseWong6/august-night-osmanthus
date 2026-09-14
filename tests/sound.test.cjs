@@ -43,6 +43,50 @@ let crossings=0;for(let i=32001;i<35200;i++)if(bell[i]*bell[i-1]<0)crossings++;
 assert(crossings/3199>.09,'主要碰撞声保留高频清脆成分');
 const repeated=box.synthesize(3,{start:4,end:5},[{time:1,pan:0}]);
 assert.deepEqual(repeated.left,bell,'摩擦和敲击随机细节在回放时保持一致');
+// 单独检查开花声，防止配乐或风声掩盖突兀起音、过亮高音与结尾截断。
+const samplePower=(samples,from,to)=>{
+  let sum=0;const begin=Math.floor(from*32000),end=Math.floor(to*32000);
+  for(let i=begin;i<end;i++)sum+=samples[i]**2;
+  return sum/(end-begin);
+};
+const bloomStages={blooms:[{time:1,duration:.4,pan:-.3}]};
+const bloom=box.synthesize(3,{start:4,end:5},[],32000,bloomStages);
+assert.equal(samplePower(bloom.left,0,1),0,'花瓣尚未展开时不提前发声');
+assert.equal(samplePower(bloom.left,1.4,3),0,'展开结束后舒展声退净');
+const bloomMiddle=samplePower(bloom.left,1.12,1.24);
+assert(bloomMiddle>1e-5,'柔软开花声仍有可听能量');
+assert(samplePower(bloom.left,1,1.01)<bloomMiddle*.01,'开花声缓慢建立，避免提示音式的硬起音');
+assert(samplePower(bloom.left,1.38,1.4)<bloomMiddle*.01,'开花声柔和收尾');
+assert.deepEqual(box.synthesize(3,{start:4,end:5},[],32000,bloomStages).left,bloom.left,'花瓣摩擦细节可重现');
+const tonalShare=(samples,from,to,frequency)=>{
+  let real=0,imaginary=0,power=0;const begin=Math.floor(from*32000),end=Math.floor(to*32000);
+  for(let i=begin;i<end;i++){
+    const phase=2*Math.PI*frequency*(i-begin)/32000,v=samples[i];
+    real+=v*Math.cos(phase);imaginary+=v*Math.sin(phase);power+=v*v;
+  }
+  return 2*(real*real+imaginary*imaginary)/((end-begin)*power);
+};
+assert(Math.max(...Array.from({length:191},(_,i)=>tonalShare(bloom.left,1.08,1.32,100+i*10)))<.12,
+  '开花声没有突出、持续的单个音高');
+const sparkle=box.synthesize(3,{start:4,end:5},[],32000,{sparkles:[{time:1,pan:0,note:0}]});
+assert.equal(samplePower(sparkle.left,0,1),0);
+assert.equal(samplePower(sparkle.left,2.25,3),0,'星光余韵在缓存末尾前退净');
+const starBody=samplePower(sparkle.left,1.04,1.1);
+assert(starBody>1e-5&&samplePower(sparkle.left,1,1.008)<starBody*.08,'星光起音清晰而柔和');
+assert(samplePower(sparkle.left,1.45,1.7)>starBody*.003,'星光有轻薄余韵，不是孤立的短哔声');
+assert(samplePower(sparkle.left,2.1,2.25)<starBody*.0001,'余韵尾部平滑消散');
+assert(Math.max(...Array.from({length:161},(_,i)=>tonalShare(sparkle.left,1.02,1.15,1000+i*10)))<.8,
+  '星光由多组共鸣构成，单一纯音不占满主体');
+assert.notDeepEqual(sparkle.left,sparkle.right,'轻微空间反射分布在左右声道');
+assert.deepEqual(box.synthesize(3,{start:4,end:5},[],32000,{sparkles:[{time:1,pan:0,note:0}]}).left,sparkle.left);
+const layers={wind:{start:.2,end:.8},cues:[{time:.4,pan:-.3}]};
+const withoutBloom=box.synthesize(3,layers.wind,layers.cues);
+const withBloom=box.synthesize(3,layers.wind,layers.cues,32000,bloomStages);
+for(const channel of ['left','right']){
+  assert.deepEqual(withBloom[channel].slice(0,32000),withoutBloom[channel].slice(0,32000));
+  assert.deepEqual(withBloom[channel].slice(44800),withoutBloom[channel].slice(44800),
+    '增加开花声不会改变风声、碰撞声的随机波形或整体音量');
+}
 const stages={wood:{start:0,end:2.7},leaves:{start:.9503908852462634,end:2.890855697532442},
   blooms:[{time:4.2,pan:-.4}],flights:[{start:10,end:20,phase:1,panFrom:-.6,panTo:.65}],
   stars:[{first:18.45,period:4,pan:.4,note:2}]};
@@ -54,6 +98,7 @@ const fullAudio=box.NightTreeSound.create({...settings,stages});fullAudio.play(1
 const mainVoice=sources.at(-1),beforeStar=sources.length;
 fullAudio.tickStars(18.46);assert.equal(sources.length,beforeStar+1,'星星亮度峰值触发轻响');
 const starVoice=sources.at(-1);assert(starVoice.buffer.getChannelData(0).some(v=>Math.abs(v)>.01));
+assert.equal(starVoice.buffer.getChannelData(0).length,32000*1.25,'缓存覆盖完整星光余韵');
 fullAudio.tickStars(18.48);assert.equal(sources.length,beforeStar+1,'同一闪光不重复触发');
 fullAudio.finish();assert(mainVoice.stopped!==undefined);assert.equal(starVoice.stopped,undefined,'主体结束不切断星光余音');
 fullAudio.tickStars(26.4);fullAudio.tickStars(26.46);assert.equal(sources.length,beforeStar+2,'结尾星光继续响，主体音轨不重播');
@@ -64,4 +109,4 @@ fullAudio.play(0);assert.equal(sources.at(-1).offset,0,'重播从树生长开始
 let failed=0;const unsupported={};vm.createContext(unsupported);vm.runInContext(code,unsupported);
 const silent=unsupported.NightTreeSound.create({...settings,onUnavailable:()=>failed++});silent.play(0);silent.play(1);
 assert.equal(failed,1);assert.equal(silent.position(2),2,'不支持音频时继续以画面时间播放');
-console.log('通过：点击后才启用音频、生长／长叶／开花／飞行音效、风叶声与叮当瞬态、星光峰值触发及尾声控制、立体声和峰值、末段退净、音画时钟、静音、暂停淡出、重播复用、无音频支持降级。');
+console.log('通过：开花柔和起落与无单音尖峰、星光多组共鸣与完整余韵、独立声音不改变风和碰撞、点击后才启用音频、生长／长叶／开花／飞行音效、风叶声与叮当瞬态、星光峰值触发及尾声控制、立体声和峰值、末段退净、音画时钟、静音、暂停淡出、重播复用、无音频支持降级。');
