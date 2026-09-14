@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#101c30">
+  <title>爱 · 花落成蝶</title>
+  <link rel="stylesheet" href="style.css">
+  <script defer src="vendor/p5.min.js"></script>
+  <script defer src="tree-data.js"></script>
+  <script defer src="scene.js"></script>
+</head>
+<body>
+  <main class="painting" aria-label="花落成蝶，一幅三比四的夜晚互动小画">
+    <div id="landscape" role="img" aria-label="深蓝夜色里，原来的桂花树从裸枝长成完整枝叶与金花。桂花飘落后化蝶，飞入右上方夜空，月牙随蝶群抵达逐渐盈满。"></div>
+    <div class="controls">
+      <button id="play" type="button" disabled>正在准备夜色</button>
+      <label class="timeline"><span>夜起</span><input id="progress" type="range" min="0" max="2400" value="0" step="1" aria-label="动画进度" disabled><span>月满</span></label>
+      <output id="time" for="progress">0.00 / 24.00 秒 · 夜色</output>
+    </div>
+    <p id="status" class="sr-only" role="status" aria-live="polite">画面正在准备。</p>
+  </main>
+  <noscript>请开启 JavaScript，观看花落成蝶。</noscript>
+</body>
+</html>
