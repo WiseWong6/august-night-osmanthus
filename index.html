@@ -3,18 +3,22 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="theme-color" content="#101c30">
+  <meta name="theme-color" content="#244ff1">
   <title>爱 · 花落成蝶</title>
   <link rel="stylesheet" href="style.css">
   <script defer src="vendor/p5.min.js"></script>
   <script defer src="tree-data.js"></script>
+  <script defer src="sound.js"></script>
+  <script defer src="moon-map.js"></script>
   <script defer src="scene.js"></script>
 </head>
 <body>
-  <main class="painting" aria-label="花落成蝶，一幅三比四的夜晚互动小画">
-    <div id="landscape" role="img" aria-label="深蓝夜色里，原来的桂花树从裸枝长成完整枝叶与金花。桂花飘落后化蝶，飞入右上方夜空，月牙随蝶群抵达逐渐盈满。"></div>
+  <main class="work" aria-label="花落成蝶">
+    <section class="painting" aria-label="三比四主场景">
+    <div id="landscape" role="img" aria-label="细磨砂蓝色夜空里，桂花树长成银叶与金花。月牙、星星和小树叶向左飘落后化蝶，部分停在途中变成星星，其余飞入右上方月亮，推动月牙逐渐变为圆月。"></div>
+    </section>
     <div class="controls">
-      <button id="play" type="button" disabled>正在准备夜色</button>
+      <div class="playback"><button id="play" type="button" disabled>正在准备夜色</button><button id="sound" type="button" aria-pressed="true" aria-label="播放音效">音效：开</button></div>
       <label class="timeline"><span>夜起</span><input id="progress" type="range" min="0" max="2400" value="0" step="1" aria-label="动画进度" disabled><span>月满</span></label>
       <output id="time" for="progress">0.00 / 24.00 秒 · 夜色</output>
     </div>
