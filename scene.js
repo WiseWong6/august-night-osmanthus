@@ -18,9 +18,7 @@ const W=720,H=960,DURATION=24,TREE_END=3,MORPH_TIME=.85;
 // 主画面独立取景：去掉原来给控件预留的空白，再等比映射到 3:4 画布。
 const VIEW={width:640,height:640*4/3,scale:720/640};
 const LEAF_START=data.leafClockStart,LEAF_END=data.leafClockEnd;
-// 第一批花苞紧接最后一片叶子展开，整段花期和后续风声一起前移。
-const FLOWER_OFFSET=LEAF_END-Math.min(...flowers.map(f=>f.budAt));
-const BLOOM_END=Math.max(...flowers.map(f=>f.start+f.duration))+FLOWER_OFFSET;
+
 // 只改变整棵树的显示位置和比例，内部坐标、枝叶尺寸比例与生长时间不变。
 const PLACEMENT={scale:.6,x:225,y:770,rootX:360,rootY:745};
 // 重力使用取景像素 / 秒²；同一种弹性使回弹高度只随实际落差变化。
@@ -51,21 +49,19 @@ function leafProgress(leaf,t){
   return branchProgress(leaf,t);
 }
 function flowerProgress(f,t){
-  if(t<=LEAF_END)return 0;
-  t-=FLOWER_OFFSET;
-  if(t<=f.budAt)return 0;
-  if(t<f.start)return .22*smooth((t-f.budAt)/(f.start-f.budAt));
-  return mix(.22,f.maxOpen,branchProgress(f,t));
+  const clock=flowerClocks.get(f);
+  if(t<=clock.budAt)return 0;
+  if(t<clock.start)return .22*smooth((t-clock.budAt)/(clock.start-clock.budAt));
+  return mix(.22,f.maxOpen,clamp((t-clock.start)/f.duration));
 }
 // 参考本地动作库“风吹过，蒲公英散开”的移动风锋与局部响应。
-const WIND={start:BLOOM_END,end:BLOOM_END+5.5,speed:82,origin:405,width:145};
 function windState(t,x,y=680){
   const front=WIND.origin+(t-WIND.start)*WIND.speed,centerX=300-(front-WIND.origin)*.34;
   const envelope=smooth((t-WIND.start)/.35)*(1-smooth((t-(WIND.end-.6))/.6));
   const strength=Math.exp(-(((y-front)/WIND.width)**2)-(((x-centerX)/340)**2))*envelope;
   return {front,centerX,envelope,strength};
 }
-const IMPACT={start:WIND.start+.16,duration:.7};
+
 function treeShake(t){
   if(t<=IMPACT.start||t>=IMPACT.start+IMPACT.duration)return 0;
   const u=(t-IMPACT.start)/IMPACT.duration;
@@ -122,6 +118,31 @@ const extraFlowers=(()=>{
   return added;
 })();
 const canopyFlowers=[...flowers,...extraFlowers];
+// 只建立显示时钟，不改原树数据；同叶腋的花簇共享枝叶就绪时刻。
+const flowerClocks=new Map();
+const leafNodes=new Map(),leafBranches=new Map(),leafGroups=new Map();
+for(const l of visibleLeaves){
+  leafNodes.set(`${l.node}:${l.side}`,l);
+  for(const [map,key] of [[leafBranches,l.branch],[leafGroups,l.volume]]){
+    if(!map.has(key))map.set(key,[]);map.get(key).push(l);
+  }
+}
+for(const f of canopyFlowers){
+  const candidates=leafBranches.get(f.branch)||leafGroups.get(f.volume);
+  const anchor=f.anchor||f;
+  const leaf=leafNodes.get(`${f.node}:${f.side}`)||candidates.reduce((best,l)=>
+    Math.hypot(l.x-anchor.x,l.y-anchor.y)<Math.hypot(best.x-anchor.x,best.y-anchor.y)?l:best);
+  const b=branches[f.branch],branchAt=b.start+b.duration*f.at;
+  // smooth(.86465)≈.95：可见叶片达到九成五展开，再开始出花苞。
+  const leafAt=Math.max(LEAF_START,leaf.start+leaf.duration*.86465);
+  const delay=.04+((Math.imul(leaf.sourceIndex+1,2654435761)>>>0)/4294967296)*.08;
+  const budAt=Math.max(branchAt,leafAt)+delay,start=budAt+(f.start-f.budAt);
+  flowerClocks.set(f,{leaf,branchAt,leafAt,delay,budAt,start,end:start+f.duration});
+}
+const BLOOM_END=Math.max(...[...flowerClocks.values()].map(c=>c.end));
+const WIND={start:BLOOM_END,end:BLOOM_END+5.5,speed:82,origin:405,width:145};
+const IMPACT={start:WIND.start+.16,duration:.7};
+
 const CANOPY_FLOWER_SCALE=1.1; // 单朵放大，花位与掉落物尺寸保持原值。
 function symbolPath(ctx,f,r){
   ctx.beginPath();
@@ -449,7 +470,7 @@ function symbolFlowPaths(f){
 }
 const fallingSurfacePaths=new Map(fallingFlowers.map(f=>[f,symbolFlowPaths(f)]));
 function surfaceLight(light,t){
-  const start=light.kind==='leaf'?LEAF_END+.12:BLOOM_END+.08;
+  const start=light.kind==='leaf'?LEAF_END+.12:flowerClocks.get(light.item).end+.08;
   const age=t-start-light.delay,duration=light.kind==='leaf'?SURFACE_LIGHT.leafDuration:SURFACE_LIGHT.flowerDuration;
   if(age<0||reduced.matches)return {head:0,alpha:0};
   const phase=age%SURFACE_LIGHT.period;
@@ -466,6 +487,38 @@ function lunarPixel(x,y){
   const dark=[176,168,149],light=[255,247,218];
   // 只均匀提亮原月貌，不叠亮边，沿用原有轮廓透明度。
   return [...dark.map((v,i)=>Math.round(Math.min(255,mix(v,light[i],tone)*1.06))),Math.round(255*clamp((1-Math.sqrt(rr))*192))];
+}
+// 月面颜色只取样一次，圆边、明暗面和月相边界在同一高采样画布中合成。
+function createMoonRaster(pixelRatio,displayScale=1,screenRatio=pixelRatio){
+  const sampling=VIEW.scale*pixelRatio*4;
+  // 过渡宽度以最终屏幕像素计，避免整幅画布经页面缩小后边缘又变硬。
+  const edge=1.2/(moon.r*VIEW.scale*displayScale*screenRatio);
+  const padding=Math.max(3/(VIEW.scale*pixelRatio),edge*moon.r);
+  const size=Math.ceil((moon.r+padding)*2*sampling/2)*2,span=size/sampling;
+  const step=span/size/moon.r,base=new Float32Array(size*size*6);
+  for(let y=0;y<size;y++)for(let x=0;x<size;x++){
+    const nx=((x+.5)/size-.5)*span/moon.r,ny=((y+.5)/size-.5)*span/moon.r;
+    const radius=Math.hypot(nx,ny),i=(y*size+x)*6,coverage=smooth((1-radius)/edge+.5);
+    if(!coverage)continue;
+    const inset=Math.max(1,radius/.999999),rgb=lunarPixel(nx/inset,ny/inset);
+    base.set([rgb[0],rgb[1],rgb[2],coverage,nx,ny],i);
+  }
+  return {size,span,step,edge,base,pixels:new Uint8ClampedArray(size*size*4)};
+}
+function paintMoonRaster(raster,progress){
+  const {base,pixels,edge}=raster,p=clamp(progress),k=1-2*p;
+  const softness=.055*Math.sin(Math.PI*p);
+  for(let j=0,i=0;j<pixels.length;j+=4,i+=6){
+    const coverage=base[i+3];if(!coverage||p===0){pixels[j+3]=0;continue;}
+    const x=base[i+4],y=base[i+5],arc=Math.sqrt(Math.max(0,1-y*y));
+    const distance=(x-k*arc)/Math.sqrt(1+(k*y/Math.max(arc,.00001))**2);
+    const lit=p===1?1:smooth(distance/edge+.5);
+    const shade=softness>1e-8?1-.24*(1-smooth(Math.max(0,x-k*arc)/softness)):1;
+    for(let c=0;c<3;c++)pixels[j+c]=Math.round(base[i+c]*shade);
+    // 未受光区域透明，直接露出纯黑页面，不再出现蓝灰色圆盘。
+    pixels[j+3]=Math.round(coverage*lit*255);
+  }
+  return pixels;
 }
 // 根据每只蝴蝶进入未来月面的位置求抵达区间，不用独立计时器播放月相。
 const moonTravelers=fallingFlowers.filter(f=>f.destination==='moon');
@@ -520,17 +573,6 @@ function moonOutline(progress){
   }
   return points;
 }
-// 用连续椭圆弧绘制月相边界，避免短直线拼接在放大时显出折角。
-function moonTerminator(ctx,progress,reverse=false){
-  const k=1-2*clamp(progress),rx=Math.abs(k)*moon.r;
-  if(rx<1e-8){ctx.lineTo(0,reverse?moon.r:-moon.r);return;}
-  const end=k>=0?-Math.PI/2:Math.PI*1.5;
-  ctx.ellipse(0,0,rx,moon.r,0,reverse?end:Math.PI/2,reverse?Math.PI/2:end,reverse?k<0:k>=0);
-}
-function moonPath(ctx,progress){
-  ctx.beginPath();ctx.arc(0,0,moon.r,-Math.PI/2,Math.PI/2);
-  moonTerminator(ctx,progress);ctx.closePath();
-}
 function grainPixel(x,y){return [0,0,0,255];}
 
 function phaseAt(t){
@@ -544,17 +586,23 @@ const soundStages={
   wood:{start:0,end:Math.max(...branches.map(b=>b.start+b.duration))},
   leaves:{start:LEAF_START,end:LEAF_END},
   blooms:(()=>{
-    const ordered=flowers.filter(f=>f.maxOpen>.95).sort((a,b)=>a.start+a.duration*.5-b.start-b.duration*.5);
+    const ordered=flowers.filter(f=>f.maxOpen>.95).sort((a,b)=>flowerClocks.get(a).start+a.duration*.5-flowerClocks.get(b).start-b.duration*.5);
     return Array.from({length:11},(_,i)=>{
       const f=ordered[Math.floor(i*(ordered.length-1)/10)],q=toScreen(f);
-      return {time:f.start+FLOWER_OFFSET,duration:f.duration,pan:(q.x/VIEW.width-.5)*1.4};
+      return {time:flowerClocks.get(f).start,duration:f.duration,pan:(q.x/VIEW.width-.5)*1.4};
     });
   })(),
-  flights:fallingFlowers.filter((_,i)=>i%16===0).map(f=>({
-    start:f.morphAt+MORPH_TIME,
-    end:f.destination==='star'?starTiming(f).settleAt:moonArrivals.get(f.sourceIndex).end,
-    phase:f.phase,panFrom:-.6,panTo:f.destination==='star'?.1:.65
-  })),
+  flights:(()=>{
+    const travelers=fallingFlowers.filter(f=>f.destination==='moon');
+    const first=Math.min(...travelers.map(f=>f.morphAt+MORPH_TIME));
+    return [first+.2,first+3.1,first+6].map((wanted,index)=>{
+      const available=travelers.filter(f=>f.morphAt+MORPH_TIME<=wanted&&moonArrivals.get(f.sourceIndex).start>=wanted+1.2);
+      const f=available[Math.floor((available.length-1)*index/2)];
+      const from=toScreen(flowerPose(f,wanted)),to=toScreen(flowerPose(f,wanted+1.2));
+      return {start:wanted,end:wanted+1.2,phase:f.phase,
+        panFrom:clamp(from.x/VIEW.width)*1.4-.7,panTo:clamp(to.x/VIEW.width)*1.4-.7,sourceIndex:f.sourceIndex};
+    });
+  })(),
   stars:fallingFlowers.filter(f=>f.destination==='star'&&f.starRank%4===0).map(f=>{
     const seed=((f.sourceIndex*2654435761)>>>0)/4294967296,period=3.6+seed*2.4;
     let first=18-seed*period+.45;
@@ -565,6 +613,10 @@ const soundStages={
 new p5(p=>{
   let background,treeCache,moonCache,ready=false,time=0,last=null,state='ready',finaleTime=0;
   let canopy=[];
+  let flowerAtlas;
+  const FLOWER_STEPS=128,FLOWER_TILE=24,FLOWER_COLUMNS=36;
+  const settledBranches=[...branches].sort((a,b)=>(a.start+a.duration)-(b.start+b.duration));
+  let settledCount=0,treeCacheTime=-1;
   let glitter=null,opticalCache;
   const fallingGlitter=new Map();
   // 清脆轻碰声对齐触地瞬间，不在物体尚未落地时提前敲响。
@@ -598,17 +650,24 @@ new p5(p=>{
         (list[i].x+list[i+1].x)/2,(list[i].y+list[i+1].y)/2);
       const end=list[list.length-1];ctx.lineTo(end.x,end.y);
     };
-    const normal=direction(b,0)+Math.PI/2,half=Math.max(1,b.width*.5);
-    const bark=ctx.createLinearGradient(b.x-Math.cos(normal)*half,b.y-Math.sin(normal)*half,
-      b.x+Math.cos(normal)*half,b.y+Math.sin(normal)*half);
-    bark.addColorStop(0,'#9b9d97');bark.addColorStop(.35,'#d9d2ba');
-    bark.addColorStop(.62,'#fff6dc');bark.addColorStop(1,'#b5b5ab');
-    ctx.fillStyle=bark;ctx.beginPath();ctx.moveTo(left[0].x,left[0].y);trace(left);
+    ctx.fillStyle='#fff6dc';ctx.beginPath();ctx.moveTo(left[0].x,left[0].y);trace(left);
     const tip=curve(b,amount);ctx.quadraticCurveTo(tip.x,tip.y,right[count].x,right[count].y);
     trace(right.reverse());ctx.closePath();ctx.fill();
     const parent=b.parent>=0?branches[b.parent]:null;
     const radius=(parent?parent.r1:b.r0)*smooth(amount/.15);
     ctx.beginPath();ctx.arc(b.x,b.y,Math.max(.02,radius),0,Math.PI*2);ctx.fill();
+  }
+  function drawGrowingTree(ctx,t){
+    if(t<treeCacheTime){treeCache.clear();settledCount=0;}
+    while(settledCount<settledBranches.length){
+      const b=settledBranches[settledCount];if(b.start+b.duration>t)break;
+      drawBranch(treeCache.drawingContext,b,1);settledCount++;
+    }
+    treeCacheTime=t;p.image(treeCache,0,0);
+    // 已长成的枝干只绘制一次；当前仍在伸展的部分保持原始曲线和速度。
+    for(let i=settledCount;i<settledBranches.length;i++){
+      const b=settledBranches[i];if(b.start<t)drawBranch(ctx,b,branchProgress(b,t));
+    }
   }
   function buildBackground(){
     const ctx=background.drawingContext,w=Math.floor(W*density),h=Math.floor(H*density);
@@ -616,34 +675,24 @@ new p5(p=>{
     for(let y=0;y<h;y++)for(let x=0;x<w;x++)pixels.data.set(grainPixel(x,y),(y*w+x)*4);
     ctx.putImageData(pixels,0,0);
   }
+  let moonRaster,moonImage,lastMoonPhase=-1;
   function buildMoon(){
-    // 只在初始化生成一次；密度独立固定，缩到月面时仍保留细小明暗。
-    moonCache=p.createGraphics(192,192);moonCache.pixelDensity(2);
-    const ctx=moonCache.drawingContext,pixels=ctx.createImageData(384,384);
-    for(let y=0;y<384;y++)for(let x=0;x<384;x++)
-      pixels.data.set(lunarPixel((x+.5)/192-1,(y+.5)/192-1),(y*384+x)*4);
-    ctx.putImageData(pixels,0,0);
+    const displayWidth=document.querySelector('#landscape').getBoundingClientRect?.().width||W;
+    moonRaster=createMoonRaster(density,displayWidth/W,window.devicePixelRatio||1);
+    moonCache?.remove?.();
+    moonCache=p.createGraphics(moonRaster.size/2,moonRaster.size/2);moonCache.pixelDensity(2);
+    moonImage=moonCache.drawingContext.createImageData(moonRaster.size,moonRaster.size);
+    lastMoonPhase=-1;
   }
   function drawMoon(t){
     const progress=moonProgress(t);if(progress<=0)return;
-    const ctx=p.drawingContext;ctx.save();ctx.translate(moon.x,moon.y);
-    ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality='high';
-    // 暗面仅是隐约的蓝灰球体，亮面仍沿月相边界展开，不以整圆淡入代替。
-    const dark=ctx.createRadialGradient(-moon.r*.3,-moon.r*.3,0,0,0,moon.r);
-    dark.addColorStop(0,'#283342');dark.addColorStop(1,'#141e2c');
-    ctx.globalAlpha=smooth(progress/.08)*.7;ctx.fillStyle=dark;
-    ctx.beginPath();ctx.arc(0,0,moon.r,0,Math.PI*2);ctx.fill();ctx.globalAlpha=1;
-    ctx.save();moonPath(ctx,progress);ctx.clip();
-    p.image(moonCache,-moon.r,-moon.r,moon.r*2,moon.r*2);
-    // 沿弯曲明暗交界逐层加深，满月时退出，避免月牙内缘像硬切纸片。
-    const softness=.055*Math.sin(Math.PI*progress);
-    for(let j=0;j<10;j++){
-      const inner=Math.max(0,progress-softness*(j+1)/10);
-      ctx.beginPath();ctx.moveTo(0,moon.r);
-      moonTerminator(ctx,progress);moonTerminator(ctx,inner,true);
-      ctx.closePath();ctx.fillStyle='rgba(94,72,40,.045)';ctx.fill();
+    if(progress!==lastMoonPhase){
+      moonImage.data.set(paintMoonRaster(moonRaster,progress));
+      moonCache.drawingContext.putImageData(moonImage,0,0);lastMoonPhase=progress;
     }
-    ctx.restore();ctx.restore();
+    const ctx=p.drawingContext;ctx.save();ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality='high';
+    // 只缩放合成后的月面一次，不再另叠圆边或裁剪边。
+    const span=moonRaster.span;p.image(moonCache,moon.x-span/2,moon.y-span/2,span,span);ctx.restore();
   }
   const wingMaterials=[
     {root:'#9b7135',middle:'#ebbd63',tip:'#fff0bc',rim:'#fff8df',vein:'#946a32',light:'255,249,224'},
@@ -816,10 +865,27 @@ new p5(p=>{
     }
     ctx.fillStyle=falling?'#b87300':'#ffe2a0';ctx.beginPath();ctx.ellipse(0,0,2.6,2.4,0,0,Math.PI*2);ctx.fill();ctx.restore();
   }
-  function drawFlower(ctx,f,t){
+  function buildFlowerAtlas(){
+    const rows=Math.ceil((FLOWER_STEPS+1)*12/FLOWER_COLUMNS);
+    flowerAtlas=p.createGraphics(FLOWER_COLUMNS*FLOWER_TILE,rows*FLOWER_TILE);flowerAtlas.pixelDensity(2);
+    const ctx=flowerAtlas.drawingContext;
+    for(let step=0;step<=FLOWER_STEPS;step++)for(let palette=0;palette<3;palette++)for(let variant=0;variant<4;variant++){
+      const cell=step*12+palette*4+variant,x=cell%FLOWER_COLUMNS*FLOWER_TILE,y=Math.floor(cell/FLOWER_COLUMNS)*FLOWER_TILE;
+      ctx.save();ctx.translate(x+FLOWER_TILE/2,y+FLOWER_TILE/2);ctx.scale(FLOWER_TILE/64,FLOWER_TILE/64);
+      flowerShape(ctx,{size:64/1.2,palette,variant},step/FLOWER_STEPS);ctx.restore();
+    }
+  }
+  function drawFlower(ctx,f,t,animated=false){
     if(!flowerAttached(f,t))return;
+    const progress=flowerProgress(f,t);if(progress<=0)return;
     ctx.save();ctx.translate(f.x,f.y);ctx.rotate(f.rotation);
-    flowerShape(ctx,f,flowerProgress(f,t));ctx.restore();
+    if(animated){
+      // 原花瓣造型预绘为细分展开画格，避免数千朵花每帧重建渐变。
+      const step=Math.round(progress*FLOWER_STEPS),cell=step*12+f.palette*4+f.variant;
+      const x=cell%FLOWER_COLUMNS*FLOWER_TILE,y=Math.floor(cell/FLOWER_COLUMNS)*FLOWER_TILE,span=f.size*1.2;
+      ctx.drawImage(flowerAtlas.canvas,x*2,y*2,FLOWER_TILE*2,FLOWER_TILE*2,-span/2,-span/2,span,span);
+    }else flowerShape(ctx,f,progress);
+    ctx.restore();
   }
   // 细光芒从亮核向两端退去，不用厚实星形或持续光晕。
   function drawGlint(ctx,x,y,amount,scale,extent=1){
@@ -872,17 +938,18 @@ new p5(p=>{
   function drawOpticalGlints(ctx,slot,kind){
     if(!glitter?.available)return;
     for(const point of glitter.highlights(slot)){
-      const amount=smooth((point.energy-.08)/.8);if(amount<.015)continue;
+      const enhanced=kind==='flower'||kind==='wing';
+      const amount=smooth((point.energy-(enhanced?.04:.08))/(enhanced?.6:.8));if(amount<.015)continue;
       const transform=ctx.getTransform();
       const x=(transform.a*point.x+transform.c*point.y+transform.e)/density;
       const y=(transform.b*point.x+transform.d*point.y+transform.f)/density;
       // 位置跟随叶片/翅膀；光学光芒使用画面坐标，收翅时不会压扁或缩没。
       ctx.save();ctx.setTransform(density,0,0,density,0,0);ctx.translate(x,y);ctx.rotate(.16);
       ctx.globalCompositeOperation='screen';ctx.globalAlpha*=amount;
-      const reach=(kind==='flower'?11:kind==='leaf'?17:25)*(.7+.3*amount);
+      const reach=(kind==='flower'?15:kind==='wing'?30:kind==='leaf'?17:25)*(.7+.3*amount);
       const side=80*reach/29,sourceX=point.gold?0:80;
       ctx.drawImage(opticalCache.canvas,sourceX*2,0,160,160,-side/2,-side/2,side,side);
-      ctx.fillStyle='#fffdf7';ctx.beginPath();ctx.arc(0,0,.72+amount*.35,0,Math.PI*2);ctx.fill();
+      ctx.fillStyle='#fffdf7';ctx.beginPath();ctx.arc(0,0,enhanced?.95+amount*.45:.72+amount*.35,0,Math.PI*2);ctx.fill();
       ctx.restore();
     }
   }
@@ -976,8 +1043,8 @@ new p5(p=>{
       const wing=butterflyWing(f,t,1),n=f.wingSize*.64;ctx.globalAlpha=pose.opacity*depth.alpha;
       drawGlint(ctx,mix(f.size*.12*appearance.size,n*.65*wing.width,pose.morph)*(1-pose.star),
         mix(-f.size*.16*appearance.size,n*(-.46+.65*wing.lift),pose.morph)*(1-pose.star),
-        appearance.glint*mix(1,.22+.36*wing.sheen,pose.morph)*(1-pose.star)*
-        mix(movingLightGain(f,t,'symbol'),movingLightGain(f,t,'wing'),pose.morph),pose.scale,mix(1,.48,pose.morph));
+        appearance.glint*mix(1,.4+.5*wing.sheen,pose.morph)*(1-pose.star)*
+        mix(movingLightGain(f,t,'symbol'),movingLightGain(f,t,'wing'),pose.morph),pose.scale,mix(1,.65,pose.morph));
     }
     ctx.restore();
   }
@@ -1019,7 +1086,7 @@ new p5(p=>{
     if(!glitter?.available)return;
     const jobs=[],gain=reduced.matches?0:1-smooth((t-DURATION+.8)/.8);
     for(const light of canopyGlitter){
-      const f=light.item,open=smooth((t-f.start-f.duration-FLOWER_OFFSET)/.25);
+      const f=light.item,open=smooth((t-flowerClocks.get(f).end)/.25);
       light.active=open*gain>.001&&flowerAttached(f,t);if(!light.active)continue;
       jobs.push({slot:light.slot,gain:open*gain,tiltX:treeShake(t)*2,tiltY:0,angle:f.rotation+f.variant*.29});
     }
@@ -1108,10 +1175,9 @@ new p5(p=>{
     ctx.save();ctx.translate(PLACEMENT.x,PLACEMENT.y);
     ctx.scale(PLACEMENT.scale,PLACEMENT.scale);ctx.translate(-PLACEMENT.rootX,-PLACEMENT.rootY);
     ctx.save();ctx.translate(PLACEMENT.rootX,PLACEMENT.rootY);const bend=treeShake(t);ctx.transform(1,0,bend,1-bend*.55,0,0);ctx.translate(-PLACEMENT.rootX,-PLACEMENT.rootY);
-    ctx.globalAlpha*=treeAttention(t);
-    if(t>=TREE_END)p.image(treeCache,0,0);
-    else for(const branch of branches)drawBranch(ctx,branch,branchProgress(branch,t));
+    drawGrowingTree(ctx,t);
     for(const band of canopy){
+      ctx.globalAlpha=treeAttention(t);
       if(t>=LEAF_END)p.image(band.cache,band.x,band.y);
       else for(const leaf of band.leaves)drawLeaf(leaf,t);
       if(glitter?.available)for(const light of band.glitterLeaves)drawGlitterLeaf(light,t);
@@ -1129,7 +1195,7 @@ new p5(p=>{
         }
         p.image(band.flowerCache,band.x,band.y);
       }
-      else for(const f of band.flowers)drawFlower(ctx,f,t);
+      else for(const f of band.flowers)drawFlower(ctx,f,t,true);
       if(glitter?.available)for(const light of band.glitterFlowers)drawGlitterFlower(light,t);
       else for(const light of band.flowerLights)drawSurfaceLight(light,t);
       ctx.restore();
@@ -1151,7 +1217,7 @@ new p5(p=>{
       p.pixelDensity(density);p.createCanvas(W,H).parent('landscape');p.frameRate(30);
       background=p.createGraphics(W,H);background.pixelDensity(density);
       treeCache=p.createGraphics(W,H);treeCache.pixelDensity(density);
-      buildBackground();buildMoon();for(const b of branches)drawBranch(treeCache.drawingContext,b,1);buildCanopy();buildOpticalCache();buildGlitter();
+      buildBackground();buildMoon();buildFlowerAtlas();buildCanopy();buildOpticalCache();buildGlitter();
       ready=true;button.disabled=false;slider.disabled=false;update();
       status.textContent='夜色已准备好。点击按钮，桂树生长，月牙、星星和银叶随风落地、反弹后化蝶，部分留作星光，部分汇入满月。';
       if(document.hidden)p.noLoop();
@@ -1186,6 +1252,7 @@ new p5(p=>{
     soundButton.textContent=sound.enabled?'音效：开':'音效：关';
     soundButton.setAttribute('aria-pressed',String(sound.enabled));
   });
+  window.addEventListener?.('resize',()=>{if(!ready)return;buildMoon();wake();});
   window.addEventListener?.('pagehide',()=>sound?.stop());
 },document.querySelector('#landscape'));
 })();

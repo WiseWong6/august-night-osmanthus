@@ -49,6 +49,23 @@ const samplePower=(samples,from,to)=>{
   for(let i=begin;i<end;i++)sum+=samples[i]**2;
   return sum/(end-begin);
 };
+// 单独比较扑翼音轨：减轻扑翼不改变其他声音的波形或总体音量。
+const flightStages={flights:[1,3.9,6.8].map((start,i)=>({start,end:start+1.2,phase:i+.4,panFrom:-.4,panTo:.3}))};
+const quietWind={start:10,end:11};
+const flight=box.synthesize(9,quietWind,[],32000,flightStages);
+// 修改前同一独立音轨的均方能量，固定保存以免提交后比较基准跟着移动。
+const newPower=samplePower(flight.left,0,9),oldPower=.0000032219197072453452;
+assert(newPower>0&&Math.sqrt(newPower/oldPower)<.4,'扑翼音轨均方根降至旧强度四成以下');
+for(const f of flightStages.flights){
+  assert(samplePower(flight.left,f.start,f.start+.02)<samplePower(flight.left,f.start+.2,f.end-.2)*.02);
+  assert(samplePower(flight.left,f.end-.02,f.end)<samplePower(flight.left,f.start+.2,f.end-.2)*.02);
+}
+for(const [from,to] of [[0,1],[2.2,3.9],[5.1,6.8],[8,9]])assert.equal(samplePower(flight.left,from,to),0,'三段扑翼之间保持安静');
+const otherStages={wood:{start:0,end:.5},leaves:{start:.4,end:1},blooms:[{time:1,duration:.4,pan:0}],sparkles:[{time:1.5,pan:0,note:1}]};
+const otherNew=box.synthesize(3,{start:.5,end:1.5},[{time:1.8,pan:0}],32000,otherStages);
+const originalHashes=['8c83ec5b0f34fe20b176f4e8000ef2cd91dedbab915fdd217eb37f02432c2a31','02badd293c202fa27e8f2b707c9b5cc2c650a5189e4991ccd3770c1721dce0cd'];
+for(const [i,channel] of ['left','right'].entries())assert.equal(require('node:crypto').createHash('sha256').update(Buffer.from(otherNew[channel].buffer)).digest('hex'),originalHashes[i],'其他音效完全保持原有强度与波形');
+console.log('扑翼独立音轨响度为原来的',Math.round(Math.sqrt(newPower/oldPower)*100)+'%');
 const bloomStages={blooms:[{time:1,duration:.4,pan:-.3}]};
 const bloom=box.synthesize(3,{start:4,end:5},[],32000,bloomStages);
 assert.equal(samplePower(bloom.left,0,1),0,'花瓣尚未展开时不提前发声');
@@ -88,11 +105,12 @@ for(const channel of ['left','right']){
     '增加开花声不会改变风声、碰撞声的随机波形或整体音量');
 }
 const stages={wood:{start:0,end:2.7},leaves:{start:.9503908852462634,end:2.890855697532442},
-  blooms:[{time:4.2,pan:-.4}],flights:[{start:10,end:20,phase:1,panFrom:-.6,panTo:.65}],
+  blooms:[{time:4.2,pan:-.4}],flights:[10,12.9,15.8].map(start=>({start,end:start+1.2,phase:1,panFrom:-.6,panTo:.65})),
   stars:[{first:18.45,period:4,pan:.4,note:2}]};
 const full=box.synthesize(24,settings.wind,settings.cues,32000,stages);
 const fullPower=(from,to)=>{let sum=0;for(let i=Math.floor(from*32000);i<to*32000;i++)sum+=full.left[i]**2;return sum/((to-from)*32000);};
-for(const [from,to] of [[.4,.9],[2.72,2.8],[4.2,4.4],[15,16]])assert(fullPower(from,to)>.000001,'生长、叶片、开花与飞行各有声音');
+for(const [from,to] of [[.4,.9],[2.72,2.8],[4.2,4.4]])assert(fullPower(from,to)>.000001,'生长、叶片与开花各有声音');
+assert(fullPower(16,16.5)>1e-8,'降低扑翼强度后，混音仍保留轻柔飞行声');
 assert.equal(fullPower(22,24),0,'星光使用独立轻响，不重放主体音轨');
 const fullAudio=box.NightTreeSound.create({...settings,stages});fullAudio.play(18.4);
 const mainVoice=sources.at(-1),beforeStar=sources.length;

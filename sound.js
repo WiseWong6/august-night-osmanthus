@@ -54,7 +54,9 @@
       for(let i=Math.max(0,Math.floor(start*rate));i<Math.min(length,Math.ceil(end*rate));i++){
         const t=i/rate,age=t-start,n=random();
         fast+=(n-fast)*(kind==='wood'?.16:.64);slow+=(n-slow)*(kind==='wood'?.018:.12);
-        const envelope=smooth(age/Math.min(.16,span*.22))*(1-smooth((age-span+.22)/.22));
+        const edge=kind==='flight'?.2:Math.min(.16,span*.22);
+        const tail=kind==='flight'?.2:.22;
+        const envelope=smooth(age/edge)*(1-smooth((age-span+tail)/tail));
         const pulse=kind==='flight'?(.5+.5*Math.sin(t*11+phase))**3
           :kind==='wood'?.25+.75*(.5+.5*Math.sin(age*29+Math.sin(age*13)))**5
           :.3+.7*(.5+.5*Math.sin(age*23+Math.sin(age*17)))**2;
@@ -65,7 +67,7 @@
     };
     if(stages.wood)brush(stages.wood.start,stages.wood.end,.10,'wood');
     if(stages.leaves)brush(stages.leaves.start,stages.leaves.end,.075,'leaf');
-    for(const f of stages.flights||[])brush(f.start,f.end,.029,'flight',f.phase,f.panFrom,f.panTo);
+    for(const f of stages.flights||[])brush(f.start,f.end,.010,'flight',f.phase,f.panFrom,f.panTo);
     // 参考《风过之处》结尾的中音区延展感；不截取混合配乐，另做无固定音高的舒展声。
     const unfurl=(event,index)=>{
       const span=event.duration??.38,start=Math.floor(event.time*rate),count=Math.ceil(span*rate);
