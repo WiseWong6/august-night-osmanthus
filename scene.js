@@ -28,8 +28,8 @@ const targetMoon={x:(moon.x-PLACEMENT.x)/PLACEMENT.scale+PLACEMENT.rootX,y:(moon
 const clamp=x=>Math.max(0,Math.min(1,x));
 const mix=(a,b,t)=>a+(b-a)*t;
 const smooth=x=>{x=clamp(x);return x*x*(3-2*x);};
-const button=document.querySelector('#play'),slider=document.querySelector('#progress');
-const readout=document.querySelector('#time'),status=document.querySelector('#status'),soundButton=document.querySelector('#sound');
+const button=document.querySelector('#play'),replayButton=document.querySelector('#replay'),slider=document.querySelector('#progress');
+const readout=document.querySelector('#time'),status=document.querySelector('#status');
 const reduced=matchMedia('(prefers-reduced-motion: reduce)');
 function curve(b,t){
   const u=1-t;
@@ -624,7 +624,7 @@ new p5(p=>{
     cues:fallingFlowers.filter((_,i)=>i%6===0).map(f=>{
       const time=f.contactAt,q=toScreen(flowerPose(f,time));
       return {time,pan:(q.x/VIEW.width-.5)*1.4};
-    }),onUnavailable:()=>{soundButton.disabled=true;soundButton.textContent='音效不可用';soundButton.setAttribute('aria-label','浏览器无法播放音效，画面仍可播放');}});
+    }),onUnavailable:()=>{status.textContent='音效不可用，画面继续播放。';}});
   function syncSound(){
     if(state==='playing'&&!document.hidden&&!reduced.matches)sound?.play(time);else sound?.stop();
   }
@@ -1207,9 +1207,10 @@ new p5(p=>{
   }
   function update(){
     slider.value=String(Math.round(time*100));
-    readout.textContent=`${time.toFixed(2)} / ${DURATION.toFixed(2)} 秒 · ${phaseAt(time)}`;
-    slider.setAttribute('aria-valuetext',`${time.toFixed(2)} 秒，${phaseAt(time)}`);
-    button.textContent=state==='playing'?'暂停片刻':time>=DURATION?'再赴一场月光':time>0?'继续这场远行':'让夜色生长';
+    readout.textContent=`${time.toFixed(2)} / ${DURATION.toFixed(2)} 秒`;
+    slider.setAttribute('aria-valuetext',`${time.toFixed(2)} 秒`);
+    button.setAttribute('data-state',state==='playing'?'playing':'paused');
+    button.setAttribute('aria-label',state==='playing'?'暂停':'播放');
   }
   function wake(){last=null;if(ready&&!document.hidden)p.loop();}
   p.setup=()=>{
@@ -1218,10 +1219,10 @@ new p5(p=>{
       background=p.createGraphics(W,H);background.pixelDensity(density);
       treeCache=p.createGraphics(W,H);treeCache.pixelDensity(density);
       buildBackground();buildMoon();buildFlowerAtlas();buildCanopy();buildOpticalCache();buildGlitter();
-      ready=true;button.disabled=false;slider.disabled=false;update();
+      ready=true;button.disabled=false;replayButton.disabled=false;slider.disabled=false;update();
       status.textContent='夜色已准备好。点击按钮，桂树生长，月牙、星星和银叶随风落地、反弹后化蝶，部分留作星光，部分汇入满月。';
       if(document.hidden)p.noLoop();
-    }catch(error){button.textContent='画面未能加载';status.textContent='请刷新页面重试。';console.error(error);p.noLoop();}
+    }catch(error){button.setAttribute('aria-label','画面未能加载');status.textContent='请刷新页面重试。';console.error(error);p.noLoop();}
   };
   p.draw=()=>{
     if(!ready)return;
@@ -1247,10 +1248,11 @@ new p5(p=>{
   slider.addEventListener('input',()=>{if(!ready)return;time=clamp(Number(slider.value)/(DURATION*100))*DURATION;state='paused';finaleTime=0;sound?.stop();update();wake();});
   document.addEventListener('visibilitychange',()=>{last=null;if(!ready)return;if(document.hidden){pauseSound();p.noLoop();}else{syncSound();wake();}});
   reduced.addEventListener('change',()=>{if(reduced.matches){pauseSound();if(state==='playing')state='paused';}update();wake();});
-  soundButton.addEventListener('click',()=>{
-    if(!sound)return;sound.setEnabled(!sound.enabled);
-    soundButton.textContent=sound.enabled?'音效：开':'音效：关';
-    soundButton.setAttribute('aria-pressed',String(sound.enabled));
+  replayButton.addEventListener('click',()=>{
+    if(!ready)return;
+    sound?.stop();time=reduced.matches?DURATION:0;finaleTime=0;
+    state=reduced.matches?'finished':'playing';status.textContent='重新播放。';
+    syncSound();update();wake();
   });
   window.addEventListener?.('resize',()=>{if(!ready)return;buildMoon();wake();});
   window.addEventListener?.('pagehide',()=>sound?.stop());

@@ -609,8 +609,11 @@ document.hidden=false;events.visibilitychange();instance.draw();assert.equal(san
 slider.input();instance.draw();assert(!looping,'拖动到结尾时仍能暂停星光');
 reduced=true;media.change();button.click();instance.draw();assert.equal(slider.value,'0');button.click();instance.draw();assert.equal(slider.value,'2400');assert(!looping);
 assert(draws>50);assert.deepEqual(errors,[]);assert(!soundPlaying,'减少动态模式不启动音轨');
-nodes['#sound'].click();assert(!soundStub.enabled);assert.equal(nodes['#sound'].textContent,'音效：关');
-nodes['#sound'].click();assert(soundStub.enabled);assert.equal(nodes['#sound'].textContent,'音效：开');
+assert(soundStub.enabled,'音效默认开启，不再展示音效开关');
+reduced=false;nodes['#replay'].click();assert(soundPlaying);assert.equal(soundOffset,0);instance.draw();assert.equal(slider.value,'0');
+button.click();instance.draw();assert(!soundPlaying,'重播之后仍可暂停');
+assert(!readout.textContent.includes('·'),'时间右侧不显示阶段说明');
+
 const html=fs.readFileSync(path.join(root,'index.html'),'utf8');
 const css=fs.readFileSync(path.join(root,'style.css'),'utf8');
 assert(html.indexOf('src="glitter.js"')<html.indexOf('src="scene.js"'),'反光组件先于场景加载');
