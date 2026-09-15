@@ -6,7 +6,7 @@ class AudioContext{
   constructor(){contexts++;context=this;this.currentTime=0;this.state='suspended';this.destination={};}
   createGain(){const node={gain:{value:1,cancelScheduledValues(){},setTargetAtTime(v){this.value=v;}},connect(){},disconnect(){this.disconnected=true;}};gains.push(node);return node;}
   createBuffer(channels,length,rate){buffers++;const data=Array.from({length:channels},()=>new Float32Array(length));return{sampleRate:rate,getChannelData:i=>data[i]};}
-  createBufferSource(){const node={connect(){},disconnect(){this.disconnected=true;},start(time,offset){this.time=time;this.offset=offset;},stop(time){this.stopped=time;}};sources.push(node);return node;}
+  createBufferSource(){const node={playbackRate:{value:1},connect(){},disconnect(){this.disconnected=true;},start(time,offset){this.time=time;this.offset=offset;},stop(time){this.stopped=time;}};sources.push(node);return node;}
   resume(){this.state='running';return Promise.resolve();}
 }
 const box={AudioContext};vm.createContext(box);
@@ -128,3 +128,8 @@ let failed=0;const unsupported={};vm.createContext(unsupported);vm.runInContext(
 const silent=unsupported.NightTreeSound.create({...settings,onUnavailable:()=>failed++});silent.play(0);silent.play(1);
 assert.equal(failed,1);assert.equal(silent.position(2),2,'不支持音频时继续以画面时间播放');
 console.log('通过：开花柔和起落与无单音尖峰、星光多组共鸣与完整余韵、独立声音不改变风和碰撞、点击后才启用音频、生长／长叶／开花／飞行音效、风叶声与叮当瞬态、星光峰值触发及尾声控制、立体声和峰值、末段退净、音画时钟、静音、暂停淡出、重播复用、无音频支持降级。');
+
+fullAudio.play(4,2);const fastSource=sources.at(-1),start=fastSource.time;assert.equal(fastSource.playbackRate.value,2);
+context.currentTime=start+1.5;assert.equal(fullAudio.position(0),7,'两倍速度的声音时钟与画面同步');
+fullAudio.stop();fullAudio.play(7,.5);const slowSource=sources.at(-1);context.currentTime=slowSource.time+2;assert.equal(fullAudio.position(0),8,'半速从选中进度继续');fullAudio.stop();
+console.log('倍速音轨、恢复进度与声音时钟检查通过。');

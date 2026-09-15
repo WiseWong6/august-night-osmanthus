@@ -119,6 +119,7 @@
   }
   function create({duration,wind,cues,stages={},onUnavailable=()=>{}}){
     let ctx=null,buffer=null,source=null,voiceGain=null,master=null,enabled=true,offset=0,started=0,failed=false,generation=0;
+    let playbackRate=1;
     let starPrevious=null,starBuffers=[];const starVoices=new Set();
     function stopMain(){
       generation++;
@@ -153,11 +154,11 @@
         {sparkles:[{time:0,pan:star.pan,note:star.note}]})));
     }
     return {
-      play(time){
-        stop();if(failed||time>=duration)return;
+      play(time,rate=1){
+        stop();playbackRate=Number.isFinite(rate)?Math.max(.5,Math.min(2,rate)):1;if(failed||time>=duration)return;
         try{
           prepare();starPrevious=time;offset=time;started=ctx.currentTime+.025;
-          source=ctx.createBufferSource();source.buffer=buffer;
+          source=ctx.createBufferSource();source.buffer=buffer;source.playbackRate.value=playbackRate;
           voiceGain=ctx.createGain();voiceGain.gain.value=0;
           voiceGain.gain.setTargetAtTime(1,started,.006);source.connect(voiceGain);voiceGain.connect(master);
           const current=source,gain=voiceGain,token=generation;
@@ -171,18 +172,18 @@
       finish:stopMain,
       tickStars(time){
         const previous=starPrevious;starPrevious=time;
-        if(!ctx||failed||!enabled||ctx.state!=='running'||previous===null||time<previous||time-previous>.25)return;
+        if(!ctx||failed||!enabled||ctx.state!=='running'||previous===null||time<previous||time-previous>.25*playbackRate)return;
         for(const [i,star] of (stages.stars||[]).entries()){
           const cycle=Math.floor((time-star.first)/star.period),at=star.first+cycle*star.period;
           if(cycle<0||at<=previous||at>time||at>=(star.end??Infinity)||starVoices.size>=7)continue;
           const node=ctx.createBufferSource(),gain=ctx.createGain(),voice={node,gain};
           gain.gain.value=smooth((at-18)/1.2)*(star.end===undefined?1:1-smooth((at-star.fadeAt)/(star.end-star.fadeAt)));
-          node.buffer=starBuffers[i];node.connect(gain);gain.connect(master);starVoices.add(voice);
+          node.buffer=starBuffers[i];node.playbackRate.value=playbackRate;node.connect(gain);gain.connect(master);starVoices.add(voice);
           node.onended=()=>{node.disconnect();gain.disconnect();starVoices.delete(voice);};
           node.start(ctx.currentTime,Math.max(0,time-at));
         }
       },
-      position(fallback){return source&&ctx.state==='running'?Math.min(duration,offset+Math.max(0,ctx.currentTime-started)):fallback;},
+      position(fallback){return source&&ctx.state==='running'?Math.min(duration,offset+Math.max(0,ctx.currentTime-started)*playbackRate):fallback;},
       setEnabled(value){enabled=value;if(master){master.gain.cancelScheduledValues(ctx.currentTime);master.gain.setTargetAtTime(enabled?.8:0,ctx.currentTime,.018);}},
       get enabled(){return enabled;}
     };

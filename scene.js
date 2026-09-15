@@ -3,6 +3,11 @@
 (()=>{
 const data=globalThis.NightTreeData;
 const {branches,leaves,flowers,moon}=data;
+// 三种样式共用原树与运动时序；金叶和枫叶减少银色掉落物。
+const LOOK=document.body?.dataset.look||'flowers';
+const MAPLE=LOOK==='maple-blend';
+const GOLD_LEAVES_ONLY=LOOK==='gold-leaves'||MAPLE;
+const SHOW_CANOPY_FLOWERS=!GOLD_LEAVES_ONLY;
 // 每个前后层、枝组均匀疏叶；只筛选显示，保留原始叶位和生长时间。
 const visibleLeaves=(()=>{
   const groups=new Map(),selected=new Set();
@@ -30,6 +35,10 @@ const mix=(a,b,t)=>a+(b-a)*t;
 const smooth=x=>{x=clamp(x);return x*x*(3-2*x);};
 const button=document.querySelector('#play'),replayButton=document.querySelector('#replay'),slider=document.querySelector('#progress');
 const readout=document.querySelector('#time'),status=document.querySelector('#status');
+let playbackRate=1;
+// LOCAL_SPEED_START
+const speedButton=document.querySelector('#speed');
+// LOCAL_SPEED_END
 const reduced=matchMedia('(prefers-reduced-motion: reduce)');
 function curve(b,t){
   const u=1-t;
@@ -71,16 +80,25 @@ function attachedPoint(f,t){
   const bend=treeShake(t),height=f.y-PLACEMENT.rootY;
   return {x:f.x+bend*height,y:f.y-bend*.55*height};
 }
+function leafIsGold(leaf){
+  // 固定枝组决定材质，避免逐叶随机混成杂色，也不改变叶位。
+  return GOLD_LEAVES_ONLY||(Math.imul(leaf.branch+1,2654435761)>>>0)%10<8;
+}
+function mapleMaterial(leaf){
+  const light=clamp(leaf.light*.65+leaf.layer/4*.35);
+  const autumn=smooth(clamp((leaf.x-100)/500*.56+(leaf.y-60)/540*.44));
+  const gold=[230+25*light,163+50*light,28+36*light];
+  const red=[224+31*light,65+59*light,23+22*light];
+  const rgb=gold.map((v,i)=>Math.round(mix(v,red[i],autumn)));
+  const color=`rgb(${rgb.join(',')})`;
+  return {color,fold:autumn>.5?'#ffb45e':'#ffdf69',vein:autumn>.5?'#ffd291':'#ffe789'};
+}
 function leafColor(leaf){
-  const rgb=leaf.tint.match(/\d+/g).map(Number),shade=clamp((rgb[0]+rgb[1]+rgb[2]-160)/360);
-  const light=clamp(shade*.25+leaf.light*.55+leaf.layer/4*.2);
-  // 暖白亮面、灰银背面；金花保留自己的黄色，不把整棵树染成蓝白。
-  const silver=[108,119,130],pale=[205,207,199],white=[255,248,226];
-  const from=light<.55?silver:pale,to=light<.55?pale:white;
-  const amount=light<.55?smooth((light-.2)/.35):smooth((light-.55)/.45);
-  const base=from.map((v,i)=>mix(v,to[i],amount));
-  const depth=smooth(leaf.layer/4),cool=[108,121,139];
-  return `rgb(${base.map((v,i)=>Math.round(mix(mix(v,cool[i],.24*(1-depth)),[255,251,237][i],.08*depth))).join(',')})`;
+  if(MAPLE)return mapleMaterial(leaf).color;
+  const light=clamp(leaf.light*.65+leaf.layer/4*.35);
+  const from=leafIsGold(leaf)?[230,163,28]:[193,193,181];
+  const to=leafIsGold(leaf)?[255,213,64]:[255,249,232];
+  return `rgb(${from.map((v,i)=>Math.round(mix(v,to[i],light))).join(',')})`;
 }
 // 独立补花：已有枝叶、花位不动，优先使用尚未开花的真实叶腋。
 const extraFlowers=(()=>{
@@ -143,7 +161,7 @@ const BLOOM_END=Math.max(...[...flowerClocks.values()].map(c=>c.end));
 const WIND={start:BLOOM_END,end:BLOOM_END+5.5,speed:82,origin:405,width:145};
 const IMPACT={start:WIND.start+.16,duration:.7};
 
-const CANOPY_FLOWER_SCALE=1.1; // 单朵放大，花位与掉落物尺寸保持原值。
+const CANOPY_FLOWER_SCALE=1.35; // 单朵放大，花位与掉落物尺寸保持原值。
 function symbolPath(ctx,f,r){
   ctx.beginPath();
   if(f.kind==='star'){
@@ -210,7 +228,9 @@ const fallingFlowers=Array.from({length:112},(_,i)=>{
     :kind==='moon'?['crescent-solid','crescent-outline','slim-solid','slim-outline'][variantIndex%4]:'leaf-solid';
   // 形状与金银材质分开分配，同一轮廓在下一轮切换颜色。
   const styleCount=kind==='star'?6:kind==='moon'?4:1;
-  const metal=(Math.floor(variantIndex/styleCount)+variantIndex%styleCount)%2?'silver':'gold';
+  const silver=GOLD_LEAVES_ONLY?(Math.imul(i+1,2654435761)>>>0)%7===0
+    :(Math.floor(variantIndex/styleCount)+variantIndex%styleCount)%2===1;
+  const metal=silver?'silver':'gold';
   const sourceLeaf=kind==='leaf'?visibleLeaves.reduce((best,l)=>
     Math.hypot(l.x-original.x,l.y-original.y)<Math.hypot(best.x-original.x,best.y-original.y)?l:best):null;
   const f={...original,...(sourceLeaf?{x:sourceLeaf.x,y:sourceLeaf.y}:{} ),kind,symbolStyle,wingSize:13+(i%5)};
@@ -327,8 +347,9 @@ function flightDepth(f,t){
   const far=smooth(((t-start)/f.flightDuration-.25)/.75);
   return {scale:mix(1,.62,far),alpha:mix(1,.8,far)};
 }
-function treeAttention(t){
-  return 1-.10*smooth((t-BLOOM_END-1)/4)-.12*smooth((t-14)/7);
+function treeAttention(){
+  // 离枝数量与叶片亮度独立；蝴蝶飞走后仍保留原本的金色。
+  return 1;
 }
 function fallingSize(f){
   const symbolSpan=f.size*.55*(f.kind==='leaf'?2.35:2);
@@ -585,13 +606,13 @@ function phaseAt(t){
 const soundStages={
   wood:{start:0,end:Math.max(...branches.map(b=>b.start+b.duration))},
   leaves:{start:LEAF_START,end:LEAF_END},
-  blooms:(()=>{
+  blooms:SHOW_CANOPY_FLOWERS?(()=>{
     const ordered=flowers.filter(f=>f.maxOpen>.95).sort((a,b)=>flowerClocks.get(a).start+a.duration*.5-flowerClocks.get(b).start-b.duration*.5);
     return Array.from({length:11},(_,i)=>{
       const f=ordered[Math.floor(i*(ordered.length-1)/10)],q=toScreen(f);
       return {time:flowerClocks.get(f).start,duration:f.duration,pan:(q.x/VIEW.width-.5)*1.4};
     });
-  })(),
+  })():[],
   flights:(()=>{
     const travelers=fallingFlowers.filter(f=>f.destination==='moon');
     const first=Math.min(...travelers.map(f=>f.morphAt+MORPH_TIME));
@@ -613,7 +634,7 @@ const soundStages={
 new p5(p=>{
   let background,treeCache,moonCache,ready=false,time=0,last=null,state='ready',finaleTime=0;
   let canopy=[];
-  let flowerAtlas;
+  let flowerAtlas,wingAtlas;
   const FLOWER_STEPS=128,FLOWER_TILE=24,FLOWER_COLUMNS=36;
   const settledBranches=[...branches].sort((a,b)=>(a.start+a.duration)-(b.start+b.duration));
   let settledCount=0,treeCacheTime=-1;
@@ -626,7 +647,7 @@ new p5(p=>{
       return {time,pan:(q.x/VIEW.width-.5)*1.4};
     }),onUnavailable:()=>{status.textContent='音效不可用，画面继续播放。';}});
   function syncSound(){
-    if(state==='playing'&&!document.hidden&&!reduced.matches)sound?.play(time);else sound?.stop();
+    if((state==='playing'||state==='finished')&&!document.hidden&&!reduced.matches)sound?.play(time,playbackRate);else sound?.stop();
   }
   function pauseSound(){time=sound?.position(time)??time;sound?.stop();}
   const density=Math.min(3,Math.max(2,window.devicePixelRatio||1));
@@ -700,6 +721,16 @@ new p5(p=>{
   ];
   function leafOutline(ctx,leaf){
     const n=leaf.size,w=leaf.breadth,bend=leaf.bend*n;
+    if(MAPLE){
+      // 五个尖裂片从叶柄向外展开；深凹口和细齿保留枫叶的轮廓。
+      const half=[[.12,0],[.16,-.14],[.08,-.32],[.24,-.28],[.28,-.35],
+        [.33,-.18],[.42,-.14],[.43,-.32],[.49,-.49],[.57,-.39],
+        [.69,-.54],[.66,-.27],[.74,-.29],[.69,-.10],[.82,-.13],[1,0]];
+      ctx.moveTo(0,0);
+      for(const [x,y] of half)ctx.lineTo(x*n,(y+leaf.bend*x)*n);
+      for(const [x,y] of half.slice(0,-1).reverse())ctx.lineTo(x*n,(-y+leaf.bend*x)*n);
+      ctx.lineTo(0,0);ctx.closePath();return;
+    }
     ctx.moveTo(0,0);
     ctx.bezierCurveTo(n*.20,-n*w,n*.73,-n*w+bend,n,bend);
     ctx.bezierCurveTo(n*.71,n*w+bend,n*.22,n*w*.85,0,0);ctx.closePath();
@@ -752,7 +783,7 @@ new p5(p=>{
     }
   }
   function drawSurfaceLight(light,t){
-    if(light.kind==='flower'&&!flowerAttached(light.item,t))return;
+    if(light.kind==='flower'&&(!SHOW_CANOPY_FLOWERS||!flowerAttached(light.item,t)))return;
     const flow=surfaceLight(light,t);if(flow.alpha<=.001)return;
     const ctx=p.drawingContext;ctx.save();
     ctx.beginPath();surfaceOutline(ctx,light.item,light.kind);ctx.clip();
@@ -766,7 +797,8 @@ new p5(p=>{
     for(const other of light.occluders)
       if(light.kind==='leaf'||flowerAttached(other,t))for(const part of light.kind==='leaf'?[-1]:[0,1,2,3,4])cut(other,part);
     placeSurface(ctx,light.item,light.kind);
-    strokeField(ctx,light.paths,flow.head,flow.alpha,light.kind==='leaf'?light.item.size:23,light.kind);
+    strokeField(ctx,light.paths,flow.head,flow.alpha,light.kind==='leaf'?light.item.size:23,light.kind,.24,
+      light.kind==='leaf'&&leafIsGold(light.item)?[[2.8,'#e9a72a',.26],[1.65,'#ffd454',.48],[.75,'#fff1b0',.98]]:null);
     ctx.restore();
   }
   function wingPath(ctx,n,hind){
@@ -784,40 +816,62 @@ new p5(p=>{
     }
     ctx.closePath();
   }
+  const WING_TILE_W=44,WING_TILE_H=68,WING_COLUMNS=11,WING_UNIT=32;
+  function buildWingAtlas(){
+    // 四组前后翅材质：底色/翅脉、九个反光位置、边缘。飞行时只变形与混合。
+    wingAtlas=p.createGraphics(WING_TILE_W*WING_COLUMNS,WING_TILE_H*4);wingAtlas.pixelDensity(2);
+    const ctx=wingAtlas.drawingContext,n=WING_UNIT;
+    for(let color=0;color<2;color++)for(const hind of [true,false]){
+      const material=wingMaterials[color],row=color*2+(hind?0:1);
+      for(let col=0;col<WING_COLUMNS;col++){
+        ctx.save();ctx.translate(col*WING_TILE_W+4,row*WING_TILE_H+37);
+        if(col===10){ctx.strokeStyle=material.rim;ctx.lineWidth=.28*WING_UNIT/9.6;wingPath(ctx,n,hind);ctx.stroke();}
+        else{
+          wingPath(ctx,n,hind);ctx.clip();
+          if(col===0){
+            const surface=ctx.createLinearGradient(0,n*.15,n*.92,hind?n*.65:-n*.86);
+            surface.addColorStop(0,material.root);surface.addColorStop(.38,material.middle);surface.addColorStop(1,material.tip);
+            ctx.globalAlpha=hind?.84:.94;ctx.fillStyle=surface;ctx.fillRect(-n*.1,-n*1.1,n*1.2,n*1.9);
+            ctx.globalAlpha=.28;ctx.strokeStyle=material.vein;ctx.lineWidth=.3*WING_UNIT/9.6;ctx.lineCap='round';ctx.beginPath();
+            if(hind){
+              ctx.moveTo(n*.03,n*.08);ctx.quadraticCurveTo(n*.34,n*.14,n*.65,n*.43);
+              ctx.moveTo(n*.03,n*.08);ctx.quadraticCurveTo(n*.25,n*.35,n*.36,n*.63);
+            }else{
+              ctx.moveTo(n*.04,0);ctx.quadraticCurveTo(n*.37,-n*.48,n*.87,-n*.88);
+              ctx.moveTo(n*.04,0);ctx.quadraticCurveTo(n*.47,-n*.19,n*.91,-n*.54);
+              ctx.moveTo(n*.04,0);ctx.quadraticCurveTo(n*.35,n*.02,n*.62,-n*.09);
+            }
+            ctx.stroke();
+          }else{
+            const x=n*(.48+.13*(col-1)/8),y=n*(hind?.35:-.57),pearl=ctx.createRadialGradient(x,y,0,x,y,n*.58);
+            pearl.addColorStop(0,`rgba(${material.light},.8)`);pearl.addColorStop(.42,`rgba(${material.light},.32)`);pearl.addColorStop(1,`rgba(${material.light},0)`);
+            ctx.fillStyle=pearl;ctx.fillRect(0,-n*1.1,n*1.1,n*1.9);
+          }
+        }
+        ctx.restore();
+      }
+    }
+  }
+  function paintWing(ctx,row,col,n,alpha=1){
+    if(alpha<=0)return;ctx.save();ctx.globalAlpha*=alpha;
+    const scale=n/WING_UNIT;
+    ctx.drawImage(wingAtlas.canvas,col*WING_TILE_W*2,row*WING_TILE_H*2,WING_TILE_W*2,WING_TILE_H*2,-4*scale,-37*scale,WING_TILE_W*scale,WING_TILE_H*scale);ctx.restore();
+  }
   function drawButterfly(ctx,f,t){
-    const n=f.wingSize*.64,material=wingMaterials[f.color%2];
-    ctx.save();
+    const n=f.wingSize*.64,material=wingMaterials[f.color%2];ctx.save();
     for(const side of [-1,1]){
       const wing=butterflyWing(f,t,side);
       ctx.save();ctx.transform(side*wing.width,wing.lift,0,1,0,0);
-      // 后翅在下、前翅在上，薄翼边缘透光；高光随翻转出现，而非整面扫白。
       for(const hind of [true,false]){
-        ctx.save();wingPath(ctx,n,hind);ctx.clip();
-        const surface=ctx.createLinearGradient(0,n*.15,n*.92,hind?n*.65:-n*.86);
-        surface.addColorStop(0,material.root);surface.addColorStop(.38,material.middle);surface.addColorStop(1,material.tip);
-        ctx.globalAlpha*=hind?.84:.94;ctx.fillStyle=surface;ctx.fillRect(-n*.1,-n*1.1,n*1.2,n*1.9);
-        const y=n*(hind?.35:-.57),x=n*(.48+.13*wing.width);
-        const pearl=ctx.createRadialGradient(x,y,0,x,y,n*.58);
-        pearl.addColorStop(0,`rgba(${material.light},.8)`);
-        pearl.addColorStop(.42,`rgba(${material.light},.32)`);pearl.addColorStop(1,`rgba(${material.light},0)`);
-        ctx.globalAlpha*=.28+.6*wing.sheen;ctx.fillStyle=pearl;ctx.fillRect(0,-n*1.1,n*1.1,n*1.9);ctx.restore();
+        const row=f.color%2*2+(hind?0:1),position=clamp(wing.width)*8,index=Math.min(7,Math.floor(position)),fraction=position-index;
+        paintWing(ctx,row,0,n);
+        const shine=(hind?.84:.94)*(.28+.6*wing.sheen);
+        paintWing(ctx,row,1+index,n,shine*(1-fraction));paintWing(ctx,row,2+index,n,shine*fraction);
         if(glitter?.available){
           const slot=fallingGlitter.get(f).wings[(side===1?2:0)+(hind?0:1)];
           glitter.paint(ctx,slot);drawOpticalGlints(ctx,slot,'wing');
         }
-        ctx.save();ctx.globalAlpha*=.28;ctx.strokeStyle=material.vein;ctx.lineWidth=.3;ctx.lineCap='round';
-        ctx.beginPath();
-        if(hind){
-          ctx.moveTo(n*.03,n*.08);ctx.quadraticCurveTo(n*.34,n*.14,n*.65,n*.43);
-          ctx.moveTo(n*.03,n*.08);ctx.quadraticCurveTo(n*.25,n*.35,n*.36,n*.63);
-        }else{
-          ctx.moveTo(n*.04,0);ctx.quadraticCurveTo(n*.37,-n*.48,n*.87,-n*.88);
-          ctx.moveTo(n*.04,0);ctx.quadraticCurveTo(n*.47,-n*.19,n*.91,-n*.54);
-          ctx.moveTo(n*.04,0);ctx.quadraticCurveTo(n*.35,n*.02,n*.62,-n*.09);
-        }
-        ctx.stroke();ctx.restore();
-        ctx.save();ctx.globalAlpha*=.24+.3*wing.sheen;ctx.strokeStyle=material.rim;ctx.lineWidth=.28;
-        wingPath(ctx,n,hind);ctx.stroke();ctx.restore();
+        paintWing(ctx,row,10,n,.24+.3*wing.sheen);
       }
       ctx.restore();
     }
@@ -836,17 +890,21 @@ new p5(p=>{
     const color=leafColor(leaf),n=leaf.size;
     const fold=ctx.createLinearGradient(0,-n*leaf.breadth,0,n*leaf.breadth);
     fold.addColorStop(0,color);fold.addColorStop(.48,color);
-    fold.addColorStop(.52,leaf.layer<2?(leaf.light>.5?'#c3ccd4':'#a5b1be'):(leaf.light>.5?'#fff3d5':'#c1c6c4'));fold.addColorStop(1,color);
+    fold.addColorStop(.52,MAPLE?mapleMaterial(leaf).fold:leafIsGold(leaf)?(leaf.light>.5?'#ffdf69':'#f7c339'):(leaf.light>.5?'#fff9e8':'#dddccf'));fold.addColorStop(1,color);
     ctx.fillStyle=fold;leafShape(ctx,leaf);
-    ctx.globalAlpha*=.28;ctx.strokeStyle='#f9f0d8';ctx.lineWidth=.35;
-    ctx.beginPath();ctx.moveTo(0,0);ctx.quadraticCurveTo(n*.5,leaf.bend*n*.38,n,leaf.bend*n);ctx.stroke();ctx.restore();
+    ctx.globalAlpha*=.28;ctx.strokeStyle=MAPLE?mapleMaterial(leaf).vein:leafIsGold(leaf)?'#ffe789':'#f9f0d8';ctx.lineWidth=.35;
+    ctx.beginPath();ctx.moveTo(0,0);ctx.quadraticCurveTo(n*.5,leaf.bend*n*.38,n,leaf.bend*n);
+    if(MAPLE)for(const side of [-1,1])for(const [x,y] of [[.25,.28],[.65,.46]]){
+      ctx.moveTo(n*.16,leaf.bend*n*.16);ctx.quadraticCurveTo(n*x*.66,n*(side*y*.4+leaf.bend*x*.66),n*x,n*(side*y+leaf.bend*x));
+    }
+    ctx.stroke();ctx.restore();
   }
   function flowerShape(ctx,f,progress,falling=false){
     if(progress<=0)return;
     const appear=smooth(progress/.14),open=smooth((progress-.22)/.78);
     ctx.save();const scale=f.size*1.2/64*appear*(falling?1:CANOPY_FLOWER_SCALE);ctx.scale(scale,scale);
     ctx.rotate(f.variant*.29);ctx.scale(1,[1,.82,.64,.91][f.variant]);
-    ctx.fillStyle=['#ffc632','#ffd65a','#f4bd40'][f.palette];
+    ctx.fillStyle=['#ffd540','#f7c339','#f2ba34'][f.palette];
     if(falling){
       const gold=ctx.createLinearGradient(-18,18,18,-18);
       gold.addColorStop(0,'#dc8700');gold.addColorStop(.32,'#ffb900');
@@ -859,13 +917,14 @@ new p5(p=>{
       if(unfurl<=0)continue;
       const n=mix(6,23,unfurl),w=mix(1,8,unfurl);ctx.save();ctx.rotate(i*Math.PI/2);
       const gold=ctx.createLinearGradient(0,0,n,w);
-      gold.addColorStop(0,'#f0be50');gold.addColorStop(.36,['#ffc632','#ffd65a','#f4bd40'][f.palette]);
-      gold.addColorStop(1,(i+f.variant)%3===0?'#fff4ce':'#ffe79b');ctx.fillStyle=gold;
+      gold.addColorStop(0,'#e6a31c');gold.addColorStop(.36,['#ffd540','#f7c339','#f2ba34'][f.palette]);
+      gold.addColorStop(1,(i+f.variant)%3===0?'#ffe789':'#ffdf69');ctx.fillStyle=gold;
       ctx.beginPath();petalOutline(ctx,n,w);ctx.fill();ctx.restore();
     }
-    ctx.fillStyle=falling?'#b87300':'#ffe2a0';ctx.beginPath();ctx.ellipse(0,0,2.6,2.4,0,0,Math.PI*2);ctx.fill();ctx.restore();
+    ctx.fillStyle=falling?'#b87300':'#ffe789';ctx.beginPath();ctx.ellipse(0,0,2.6,2.4,0,0,Math.PI*2);ctx.fill();ctx.restore();
   }
   function buildFlowerAtlas(){
+    if(!SHOW_CANOPY_FLOWERS)return;
     const rows=Math.ceil((FLOWER_STEPS+1)*12/FLOWER_COLUMNS);
     flowerAtlas=p.createGraphics(FLOWER_COLUMNS*FLOWER_TILE,rows*FLOWER_TILE);flowerAtlas.pixelDensity(2);
     const ctx=flowerAtlas.drawingContext;
@@ -876,7 +935,7 @@ new p5(p=>{
     }
   }
   function drawFlower(ctx,f,t,animated=false){
-    if(!flowerAttached(f,t))return;
+    if(!SHOW_CANOPY_FLOWERS||!flowerAttached(f,t))return;
     const progress=flowerProgress(f,t);if(progress<=0)return;
     ctx.save();ctx.translate(f.x,f.y);ctx.rotate(f.rotation);
     if(animated){
@@ -1064,8 +1123,8 @@ new p5(p=>{
       },[15,0]);
     }
     for(const light of leafGlitter){
-      const l=light.item,n=l.size,half=n*(l.breadth+Math.abs(l.bend))+.15*n;
-      light.slot=add([-n*.15,-half,n*1.3,half*2],0,13,.36,ctx=>{
+      const l=light.item,n=l.size,half=n*((MAPLE?.6:l.breadth)+Math.abs(l.bend))+.15*n;
+      light.slot=add([-n*.15,-half,n*1.3,half*2],leafIsGold(l)?1:0,13,.36,ctx=>{
         ctx.beginPath();leafOutline(ctx,l);ctx.fill();
       },[n*.62,l.bend*n*.55]);
     }
@@ -1087,7 +1146,7 @@ new p5(p=>{
     const jobs=[],gain=reduced.matches?0:1-smooth((t-DURATION+.8)/.8);
     for(const light of canopyGlitter){
       const f=light.item,open=smooth((t-flowerClocks.get(f).end)/.25);
-      light.active=open*gain>.001&&flowerAttached(f,t);if(!light.active)continue;
+      light.active=SHOW_CANOPY_FLOWERS&&open*gain>.001&&flowerAttached(f,t);if(!light.active)continue;
       jobs.push({slot:light.slot,gain:open*gain,tiltX:treeShake(t)*2,tiltY:0,angle:f.rotation+f.variant*.29});
     }
     for(const light of leafGlitter){
@@ -1112,7 +1171,7 @@ new p5(p=>{
     glitter.render(t,jobs);
   }
   function drawGlitterFlower(light,t=0){
-    if(!light.active)return;
+    if(!SHOW_CANOPY_FLOWERS||!light.active)return;
     const ctx=p.drawingContext;ctx.save();
     // 发光来源已裁在真实花瓣内；仅光芒能伸出，仍受同层和前层物体遮挡。
     for(const other of light.occluders)if(flowerAttached(other,t))for(let part=0;part<=4;part++){
@@ -1165,7 +1224,27 @@ new p5(p=>{
       for(const leaf of band.leaves)drawLeaf(leaf,LEAF_END,band.cache);ctx.restore();
       const fctx=band.flowerCache.drawingContext;fctx.save();fctx.translate(-band.x,-band.y);
       for(const f of band.flowers)drawFlower(fctx,f,BLOOM_END);fctx.restore();
-      band.releases=band.flowers.filter(f=>flowerRelease.has(f));band.dropped=0;return band;
+      band.releases=band.flowers.filter(f=>flowerRelease.has(f));band.dropped=0;
+      // 网格只索引原花层，不新增画布；边界与实际画布像素对齐。
+      const tileSize=48,columns=Math.ceil(width/tileSize),rows=Math.ceil(height/tileSize);
+      band.flowerTiles=Array.from({length:columns*rows},(_,i)=>({
+        x:band.x+i%columns*tileSize,y:band.y+Math.floor(i/columns)*tileSize,
+        width:Math.min(tileSize,width-i%columns*tileSize),
+        height:Math.min(tileSize,height-Math.floor(i/columns)*tileSize),flowers:[]}));
+      const tilesFor=f=>{
+        // 大于花瓣最远端，并留出抗锯齿余量，旋转后也不漏掉边缘。
+        const radius=f.size+3,tiles=[];
+        const x0=Math.max(0,Math.floor((f.x-radius-band.x)/tileSize));
+        const x1=Math.min(columns-1,Math.floor((f.x+radius-band.x)/tileSize));
+        const y0=Math.max(0,Math.floor((f.y-radius-band.y)/tileSize));
+        const y1=Math.min(rows-1,Math.floor((f.y+radius-band.y)/tileSize));
+        for(let y=y0;y<=y1;y++)for(let x=x0;x<=x1;x++)tiles.push(band.flowerTiles[y*columns+x]);
+        return tiles;
+      };
+      for(const f of band.flowers)for(const tile of tilesFor(f))tile.flowers.push(f);
+      band.flowerBounds={x:band.x,y:band.y,width,height,flowers:band.flowers};
+      band.releaseTiles=band.releases.map(tilesFor);band.attached=band.releases.map(()=>true);
+      return band;
     });
   }
   function render(t,skyTime=t){
@@ -1182,16 +1261,30 @@ new p5(p=>{
       else for(const leaf of band.leaves)drawLeaf(leaf,t);
       if(glitter?.available)for(const light of band.glitterLeaves)drawGlitterLeaf(light,t);
       else for(const light of band.leafLights)drawSurfaceLight(light,t);
-      // 花簇只按前后层次轻微柔化，亮度不随时间变化，也不继承枝叶收暗。
+      if(!SHOW_CANOPY_FLOWERS)continue;
+      // 花簇只按前后层次轻微柔化，亮度不随时间变化，不随离枝数量变暗。
       ctx.save();ctx.globalAlpha=mix(.94,1,band.layer/4);
       if(t>=BLOOM_END){
-        const dropped=band.releases.reduce((n,f)=>n+Number(!flowerAttached(f,t)),0);
-        if(dropped!==band.dropped){
-          // 只在花朵离枝或回拖跨过离枝时刻时更新原缓存，不擦穿相邻花瓣。
-          band.flowerCache.clear();const fctx=band.flowerCache.drawingContext;
-          fctx.save();fctx.translate(-band.x,-band.y);
-          for(const f of band.flowers)drawFlower(fctx,f,t);
-          fctx.restore();band.dropped=dropped;
+        const dirty=new Set();
+        for(let i=0;i<band.releases.length;i++){
+          const attached=flowerAttached(band.releases[i],t);
+          if(attached===band.attached[i])continue;
+          band.attached[i]=attached;
+          for(const tile of band.releaseTiles[i])dirty.add(tile);
+        }
+        if(dirty.size){
+          const fctx=band.flowerCache.drawingContext;fctx.save();fctx.translate(-band.x,-band.y);
+          // 大幅拖动时直接重建一次，避免跨越很多离枝事件后重复绘制相邻格子。
+          const work=Array.from(dirty).reduce((sum,tile)=>sum+tile.flowers.length,0);
+          const areas=work>band.flowers.length?[band.flowerBounds]:dirty;
+          for(const tile of areas){
+            // 原地局部清除并按原顺序重画相交花瓣，离枝和回拖都不会擦穿邻花。
+            fctx.save();fctx.beginPath();fctx.rect(tile.x,tile.y,tile.width,tile.height);fctx.clip();
+            fctx.clearRect(tile.x,tile.y,tile.width,tile.height);
+            for(const f of tile.flowers)drawFlower(fctx,f,t);
+            fctx.restore();
+          }
+          fctx.restore();band.dropped=band.attached.filter(attached=>!attached).length;
         }
         p.image(band.flowerCache,band.x,band.y);
       }
@@ -1207,8 +1300,8 @@ new p5(p=>{
   }
   function update(){
     slider.value=String(Math.round(time*100));
-    readout.textContent=`${time.toFixed(2)} / ${DURATION.toFixed(2)} 秒`;
-    slider.setAttribute('aria-valuetext',`${time.toFixed(2)} 秒`);
+    readout.textContent=`${(time/playbackRate).toFixed(2)} / ${(DURATION/playbackRate).toFixed(2)} 秒`;
+    slider.setAttribute('aria-valuetext',`${(time/playbackRate).toFixed(2)} 秒，共 ${(DURATION/playbackRate).toFixed(2)} 秒`);
     button.setAttribute('data-state',state==='playing'?'playing':'paused');
     button.setAttribute('aria-label',state==='playing'?'暂停':'播放');
   }
@@ -1218,7 +1311,7 @@ new p5(p=>{
       p.pixelDensity(density);p.createCanvas(W,H).parent('landscape');p.frameRate(30);
       background=p.createGraphics(W,H);background.pixelDensity(density);
       treeCache=p.createGraphics(W,H);treeCache.pixelDensity(density);
-      buildBackground();buildMoon();buildFlowerAtlas();buildCanopy();buildOpticalCache();buildGlitter();
+      buildBackground();buildMoon();buildFlowerAtlas();buildWingAtlas();buildCanopy();buildOpticalCache();buildGlitter();
       ready=true;button.disabled=false;replayButton.disabled=false;slider.disabled=false;update();
       status.textContent='夜色已准备好。点击按钮，桂树生长，月牙、星星和银叶随风落地、反弹后化蝶，部分留作星光，部分汇入满月。';
       if(document.hidden)p.noLoop();
@@ -1228,12 +1321,12 @@ new p5(p=>{
     if(!ready)return;
     const now=performance.now(),dt=last===null?0:Math.max(0,(now-last)/1000);last=now;const wasFinished=state==='finished';
     if(state==='playing'){
-      time=Math.min(DURATION,sound?.position(time+dt)??time+dt);
+      time=Math.min(DURATION,sound?.position(time+dt*playbackRate)??time+dt*playbackRate);
       if(time===DURATION){sound?.finish();finaleTime=0;state='finished';status.textContent='一部分蝴蝶留下星光，另一部分汇成满月。可以重新播放。';}
       update();
     }
     // 主动播放到结尾后只延续星光；拖动暂停、后台和减少动态时冻结。
-    if(wasFinished&&state==='finished'&&!reduced.matches&&!document.hidden)finaleTime+=dt;
+    if(wasFinished&&state==='finished'&&!reduced.matches&&!document.hidden)finaleTime+=dt*playbackRate;
     if((state==='playing'||state==='finished')&&!reduced.matches&&!document.hidden)sound?.tickStars(time+finaleTime);
     render(time,time+finaleTime);
     if(state!=='playing'&&(state!=='finished'||reduced.matches||document.hidden))p.noLoop();
@@ -1245,6 +1338,14 @@ new p5(p=>{
     else{if(time>=DURATION){time=0;finaleTime=0;}state='playing';status.textContent='桂树生长，月牙、星星和银叶随风落地、反弹后化蝶，部分留作星光，部分汇入满月。';}
     syncSound();update();wake();
   });
+  // LOCAL_SPEED_START
+  if(speedButton)speedButton.addEventListener('click',()=>{
+    if(!ready)return;
+    pauseSound();const rates=[.5,1,1.5,2];playbackRate=rates[(rates.indexOf(playbackRate)+1)%rates.length];
+    speedButton.textContent=`${playbackRate}×`;speedButton.setAttribute('aria-label',`播放速度 ${playbackRate} 倍，点击切换`);
+    syncSound();update();wake();
+  });
+  // LOCAL_SPEED_END
   slider.addEventListener('input',()=>{if(!ready)return;time=clamp(Number(slider.value)/(DURATION*100))*DURATION;state='paused';finaleTime=0;sound?.stop();update();wake();});
   document.addEventListener('visibilitychange',()=>{last=null;if(!ready)return;if(document.hidden){pauseSound();p.noLoop();}else{syncSound();wake();}});
   reduced.addEventListener('change',()=>{if(reduced.matches){pauseSound();if(state==='playing')state='paused';}update();wake();});

@@ -4,7 +4,7 @@ const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm'),cryp
 const root=path.join(__dirname,'..');
 let now=0,instance,looping=true,reduced=false,draws=0,capture=null,flowTrace=null,textureWrites=0,flowerCacheClears=0,gradientCount=0;
 const nodes={},events={},errors=[],sizes=[];
-let soundPlaying=false,soundSettings,soundOffset;
+let soundPlaying=false,soundSettings,soundOffset,soundRate=1;
 let glitterSurfaces=[],glitterJobs=[],glitterMasks=[],glitterTime,glitterDraws=0;
 const glitterStub={available:true,render(time,jobs){
   glitterTime=time;glitterJobs=jobs;
@@ -12,7 +12,7 @@ const glitterStub={available:true,render(time,jobs){
   for(const job of jobs){assert(glitterSurfaces[job.slot]);for(const value of Object.values(job))assert(Number.isFinite(value));assert(job.gain>0&&job.gain<=1);}
 },paint(ctx,slot){if(glitterJobs.some(job=>job.slot===slot))glitterDraws++;},
   highlights(slot){const surface=glitterSurfaces[slot];return glitterJobs.some(job=>job.slot===slot)?[{x:surface.focus?.[0]??0,y:surface.focus?.[1]??0,energy:.78,gold:surface.gold,seed:surface.seed}]:[];}};
-const soundStub={enabled:true,play(time){soundPlaying=true;soundOffset=time;},stop(){soundPlaying=false;},position(time){return time;},setEnabled(value){this.enabled=value;},finish(){soundPlaying=false;},tickStars(){}};
+const soundStub={enabled:true,play(time,rate=1){soundPlaying=true;soundOffset=time;soundRate=rate;},stop(){soundPlaying=false;},position(time){return time;},setEnabled(value){this.enabled=value;},finish(){soundPlaying=false;},tickStars(){}};
 const document={hidden:false,querySelector(id){return nodes[id]??={value:'0',disabled:true,textContent:'',setAttribute(){},addEventListener(name,fn){this[name]=fn;}};},addEventListener(name,fn){events[name]=fn;}};
 const media={get matches(){return reduced;},addEventListener(name,fn){this[name]=fn;}};
 function context(){
@@ -46,7 +46,7 @@ vm.createContext(sandbox);
 vm.runInContext(fs.readFileSync(path.join(root,'tree-data.js'),'utf8'),sandbox);
 vm.runInContext(fs.readFileSync(path.join(root,'moon-map.js'),'utf8'),sandbox);
 const source=fs.readFileSync(path.join(root,'scene.js'),'utf8');
-vm.runInContext(source.replace('new p5(p=>{','globalThis.model={flowerClocks,createMoonRaster,paintMoonRaster,starLifetime,flightDepth,treeAttention,flowerAttached,curve,branchProgress,leafProgress,flowerProgress,flowerPose,fallingFlowers,toScreen,PLACEMENT,phaseAt,LEAF_START,LEAF_END,BLOOM_END,DURATION,TREE_END,MORPH_TIME,WIND,windState,leafColor,visibleLeaves,moonArrivals,moonContribution,moonProgress,moonOutline,treeShake,attachedPoint,IMPACT,fallingAppearance,fallingSize,butterflySpread,butterflyWing,flowingLight,reflectionCycle,lunarPixel,GLINT,VIEW,GROUND_Y,GRAVITY,RESTITUTION,fallPhysics,groundOffset,extraFlowers,canopyFlowers,starTiming,moonTravelers,insideMoon,starStops,starAppearance,grainPixel,soundStages,surfaceLights,surfaceVector,surfaceLight,fallingSurfacePaths,canopyGlitter,leafGlitter,motionRibbon,movingLightGain};\nnew p5(p=>{').replace('  function render(t,skyTime=t){','  globalThis.growthCacheForTest=()=>({settledCount,treeCacheTime});globalThis.flowerStepsForTest=FLOWER_STEPS;globalThis.drawOpticalForTest=drawOpticalGlints;globalThis.drawLeafGlitterForTest=drawGlitterLeaf;globalThis.drawSymbolForTest=drawFallingSymbol;globalThis.drawSurfaceForTest=drawSurfaceLight;globalThis.drawGlitterForTest=drawGlitterFlower;globalThis.prepareGlitterForTest=prepareGlitter;\n  function render(t,skyTime=t){globalThis.skyTimeForTest=skyTime;'),sandbox);
+vm.runInContext(source.replace('new p5(p=>{','globalThis.model={GOLD_LEAVES_ONLY,SHOW_CANOPY_FLOWERS,CANOPY_FLOWER_SCALE,flowerClocks,createMoonRaster,paintMoonRaster,starLifetime,flightDepth,treeAttention,flowerAttached,curve,branchProgress,leafProgress,flowerProgress,flowerPose,fallingFlowers,toScreen,PLACEMENT,phaseAt,LEAF_START,LEAF_END,BLOOM_END,DURATION,TREE_END,MORPH_TIME,WIND,windState,leafColor,leafIsGold,visibleLeaves,moonArrivals,moonContribution,moonProgress,moonOutline,treeShake,attachedPoint,IMPACT,fallingAppearance,fallingSize,butterflySpread,butterflyWing,flowingLight,reflectionCycle,lunarPixel,GLINT,VIEW,GROUND_Y,GRAVITY,RESTITUTION,fallPhysics,groundOffset,extraFlowers,canopyFlowers,starTiming,moonTravelers,insideMoon,starStops,starAppearance,grainPixel,soundStages,surfaceLights,surfaceVector,surfaceLight,fallingSurfacePaths,canopyGlitter,leafGlitter,motionRibbon,movingLightGain};\nnew p5(p=>{').replace('  function render(t,skyTime=t){','  globalThis.drawFlowerForTest=drawFlower;globalThis.flowerBandsForTest=()=>canopy;globalThis.growthCacheForTest=()=>({settledCount,treeCacheTime});globalThis.flowerStepsForTest=FLOWER_STEPS;globalThis.drawOpticalForTest=drawOpticalGlints;globalThis.drawLeafGlitterForTest=drawGlitterLeaf;globalThis.drawSymbolForTest=drawFallingSymbol;globalThis.drawSurfaceForTest=drawSurfaceLight;globalThis.drawGlitterForTest=drawGlitterFlower;globalThis.prepareGlitterForTest=prepareGlitter;\n  function render(t,skyTime=t){globalThis.skyTimeForTest=skyTime;'),sandbox);
 const {branches,leaves,flowers,moon}=sandbox.NightTreeData,m=sandbox.model;
 assert.equal(branches.length,2017);assert.equal(leaves.length,4042);assert.equal(flowers.length,4202);
 const original={
@@ -112,7 +112,14 @@ for(let layer=0;layer<5;layer++){
   const ratio=m.visibleLeaves.filter(l=>l.layer===layer).length/leaves.filter(l=>l.layer===layer).length;
   assert(ratio>.68&&ratio<.72,'各层均匀疏叶');
 }
-for(const leaf of m.visibleLeaves){const rgb=m.leafColor(leaf).match(/\d+/g).map(Number);assert(Math.max(...rgb)-Math.min(...rgb)<=38&&Math.min(...rgb)>=88,'银叶保留暖白亮面和灰银背面');}
+for(const leaf of m.visibleLeaves){
+  const rgb=m.leafColor(leaf).match(/\d+/g).map(Number);
+  assert(rgb[0]>=rgb[1]&&rgb[1]>=rgb[2],'叶片统一暖色，不混蓝灰');
+  assert(rgb[0]>=190&&rgb[1]>=160,'后层保持清晰亮度');
+  if(m.leafIsGold(leaf))assert(rgb[0]-rgb[2]>=180&&rgb[2]<=64,'金叶保持饱和金黄色，不退成米白');
+}
+const goldLeafCount=m.visibleLeaves.filter(m.leafIsGold).length;
+assert(goldLeafCount>m.visibleLeaves.length*.65&&goldLeafCount<m.visibleLeaves.length*.95,'多数枝组转为金色，少量保留银白');
 
 
 assert.deepEqual(JSON.parse(JSON.stringify(m.toScreen({x:360,y:745}))),{x:225,y:770});
@@ -306,7 +313,7 @@ assert.equal(m.lunarPixel(1.1,0)[3],0,'月面缓存圆盘外透明');
 const lunarSample=JSON.stringify(m.lunarPixel(-.33,.2));m.lunarPixel(.1,.7);
 assert.equal(JSON.stringify(m.lunarPixel(-.33,.2)),lunarSample,'月面纹理固定，不随帧变化');
 assert.equal(m.treeAttention(m.BLOOM_END),1,'盛放时保持树冠亮度');
-assert(m.treeAttention(24)<m.treeAttention(10),'尾声桂树逐渐退为陪衬');
+for(const t of [4,10,18,24])assert.equal(m.treeAttention(t),1,'叶片原色不随落物和尾声变暗');
 for(const f of m.fallingFlowers){
   const launch=f.morphAt+m.MORPH_TIME+f.carryDuration;
   assert.equal(m.flightDepth(f,launch).scale,1,'起飞阶段不缩小');
@@ -379,7 +386,7 @@ reduced=true;
 for(const f of m.fallingFlowers)assert.equal(m.flowingLight(f,f.release+.6).alpha,0);
 reduced=false;
 instance.setup();instance.draw();assert.deepEqual(errors,[]);assert(!looping);assert(!nodes['#play'].disabled);
-assert.equal(sizes.length,15,'原场景缓存、固定光芒小图与一张花瓣展开图集');
+assert.equal(sizes.length,16,'原场景缓存、光芒与花瓣图集，加一张共享蝶翼图集');
 assert.equal(glitterJobs.length,0,'空场景不出现材质反光');
 assert(m.canopyGlitter.length>100&&m.canopyGlitter.length<=320);
 assert.equal(glitterSurfaces.length,m.canopyGlitter.length+m.leafGlitter.length+m.fallingFlowers.length*5,'只为真实花叶、掉落物和四片蝶翼建立遮罩');
@@ -389,7 +396,7 @@ assert.equal(new Set(m.canopyGlitter.map(light=>light.item)).size,m.canopyGlitte
 assert(m.leafGlitter.length>=70&&m.leafGlitter.length<=100,'足够多的分散银叶接入表面反光');
 for(let layer=2;layer<=4;layer++)assert(m.leafGlitter.some(light=>light.item.layer===layer));
 for(const light of m.leafGlitter){
-  assert(m.visibleLeaves.includes(light.item));assert.equal(glitterSurfaces[light.slot].gold,0);
+  assert(m.visibleLeaves.includes(light.item));assert.equal(glitterSurfaces[light.slot].gold,m.leafIsGold(light.item)?1:0);
   assert(glitterMasks[light.slot].some(call=>call[0]==='bezierCurveTo'),'银叶使用原叶形遮罩');
   for(const other of light.occluders)assert(other!==light.item&&other.layer===light.item.layer&&other.z>=light.item.z);
 }
@@ -771,3 +778,48 @@ for(const t of [24,1.6,2.4,0,24]){
 console.log('生长阶段花瓣渐变创建量最多减少',Math.round(greatestReduction*100)+'%，枝干缓存回拖检查通过。');
 console.log('通过：叶脉分流、花瓣曲面光路、表面亮纹实际游走、同层与前后层遮挡、局部亮纹数量及固定光路、11 种掉落形态、空心通透与轮廓流光、流光移动及暂停重播一致、掉落物与化蝶尺寸匹配、化形后平滑振翅、掉落月牙与主月亮由缺至圆、疏密与明暗分层的星空、纯黑场景、暖金月面纹理与四倍采样缓存、三种放大掉落物、28 蝶途中停驻化星、84 蝶实际入月与月相分流、独立三比四取景与外置控件、新增 1470 朵叶腋金花及间距、从右上往左下偏动与树干幅度、落花平滑放大、短促反光连续性与固定节奏、反光数量控制、原桂花完整结构与时序、左下等比缩放、银色叶片与分层疏叶、112 个真实落花来源、短促震动同步落花、离枝衔接、蝶群交错转向、落地接触、反弹后化蝶及平滑起飞、抵月消融驱动月牙变圆、月相连续与重播复位、49 个进度位置、缓存、暂停重播、后台停播、减少动态效果及本地资源。');
 console.log('未启动服务器、操作浏览器或截图；视觉效果由人工刷新验收。');
+
+// 离枝时只更新覆盖该花的格子；每格仍包含按原遮挡顺序排列的所有相交花。
+for(const band of sandbox.flowerBandsForTest()){
+  for(const tile of band.flowerTiles){
+    assert(Number.isInteger(tile.x)&&Number.isInteger(tile.y)&&Number.isInteger(tile.width)&&Number.isInteger(tile.height),'局部更新边界与像素对齐');
+    const expected=band.flowers.filter(f=>{const r=f.size+3;return f.x+r>=tile.x&&f.x-r<tile.x+tile.width&&f.y+r>=tile.y&&f.y-r<tile.y+tile.height;});
+    assert.deepEqual(tile.flowers,expected,'重画邻花时保持完整花瓣与原始遮挡顺序');
+  }
+  band.releases.forEach((f,i)=>{
+    assert(band.releaseTiles[i].every(tile=>tile.flowers.includes(f)));
+    assert.equal(band.releaseTiles[i].length,band.flowerTiles.filter(tile=>tile.flowers.includes(f)).length);
+  });
+}
+for(const t of [4,5,6,7,5,24,4]){
+  slider.value=String(t*100);slider.input();instance.draw();
+  for(const band of sandbox.flowerBandsForTest())band.releases.forEach((f,i)=>assert.equal(band.attached[i],m.flowerAttached(f,t),'局部花量在离枝和回拖时均正确更新'));
+}
+let totalGradients=0,fullLayerGradients=0;
+const releaseTimes=new Map(m.fallingFlowers.map(f=>[flowers[f.sourceIndex],f.release]));
+slider.value='400';slider.input();instance.draw();
+for(let frame=1;frame<=90;frame++){
+  const t=Math.round((4+frame/30)*100)/100,previous=Math.round((4+(frame-1)/30)*100)/100,before=gradientCount;slider.value=String(Math.round(t*100));slider.input();instance.draw();
+  totalGradients+=gradientCount-before;
+  for(const band of sandbox.flowerBandsForTest())if(band.releases.some(f=>releaseTimes.get(f)>previous&&releaseTimes.get(f)<=t))
+    fullLayerGradients+=band.flowers.filter(f=>m.flowerAttached(f,t)).length*4;
+}
+console.log('掉落回弹绘制检查：90 帧总渐变',totalGradients,'；旧式全层金花重画估算',fullLayerGradients,'。');
+assert(totalGradients<fullLayerGradients*.6,'回弹期间实际渐变创建量低于仅全层金花重画开销的六成');
+
+// 飞行阶段的绘制开销：蝶翼固定材质来自同一张小图，连续反光仍随翅膀姿态变化。
+let flightGradients=0;
+for(let i=0;i<90;i++){const before=gradientCount;slider.value=String(800+Math.round(i*100/30));slider.input();instance.draw();flightGradients+=gradientCount-before;}
+assert(flightGradients<88438*.65,'飞行阶段渐变创建量较修改前至少降低三成五');
+console.log('飞行阶段 90 帧渐变创建量：',flightGradients,'；修改前 88438。');
+// 本地倍速不改变任何绝对时间的轨迹；切换时从原进度继续且声音同步。
+const speed=nodes['#speed'];
+if(source.includes('LOCAL_SPEED_START')){
+  slider.value='800';slider.input();instance.draw();button.click();instance.draw();
+  const at=Number(slider.value);speed.click();assert.equal(soundRate,1.5);assert(soundPlaying);assert.equal(Number(slider.value),at);assert.equal(readout.textContent,'5.33 / 16.00 秒','倍速切换立即更新显示时长，进度位置不变');
+  now+=1000;instance.draw();assert.equal(Number(slider.value),at);now+=1000;instance.draw();assert.equal(Number(slider.value),at+150);assert.equal(readout.textContent,'6.33 / 16.00 秒');
+  button.click();speed.click();assert.equal(soundPlaying,false);assert.equal(speed.textContent,'2×');assert.equal(readout.textContent,'4.75 / 12.00 秒');
+  speed.click();assert.equal(speed.textContent,'0.5×');assert.equal(readout.textContent,'19.00 / 48.00 秒');speed.click();assert.equal(speed.textContent,'1×');assert.equal(readout.textContent,'9.50 / 24.00 秒');
+  assert(!/\.painting\{[^}]*outline/.test(css));assert(/\.controls\{width:100%/.test(css));
+  assert(html.indexOf('id="progress"')<html.indexOf('id="time"'));assert(html.indexOf('id="time"')<html.indexOf('</div>',html.indexOf('id="progress"')),'时间与进度条同一行');
+}
