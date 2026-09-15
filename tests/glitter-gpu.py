@@ -42,6 +42,7 @@ u1i = api('glUniform1i', None, I, I)
 u2f = api('glUniform2f', None, I, F, F)
 attribute = api('glGetAttribLocation', I, U, C.c_char_p)
 a2f = api('glVertexAttrib2f', None, U, F, F)
+a3f = api('glVertexAttrib3f', None, U, F, F, F)
 a4f = api('glVertexAttrib4f', None, U, F, F, F, F)
 enable_attribute = api('glEnableVertexAttribArray', None, U)
 attribute_pointer = api('glVertexAttribPointer', None, U, I, U, C.c_ubyte, I, P)
@@ -85,7 +86,7 @@ def compile_program():
 try:
     program = compile_program()
     use(program)
-    side, rgba, byte, tex2d = 48, 0x1908, 0x1401, 0x0DE1
+    side, rgba, byte, tex2d = 64, 0x1908, 0x1401, 0x0DE1
     target, fbo, mask = U(), U(), U()
     textures_new(1, C.byref(target))
     texture_bind(tex2d, target)
@@ -112,10 +113,11 @@ try:
     api('glDisable', None, U)(0x0BE2)
     api('glClearColor', None, F, F, F, F)(0, 0, 0, 0)
 
-    def frame(time, tilt=0, gold=1, gain=1):
+    def frame(time, tilt=0, gold=1, gain=1, glint=(.74, .5, 0), material=None, pose=None):
         u1f(uniform(program, b'u_time'), time)
-        a4f(attribute(program, b'a_pose'), tilt, 0, .4, gain)
-        a4f(attribute(program, b'a_material'), 7.19, gold, 19, .5)
+        a4f(attribute(program, b'a_pose'), *(pose or (tilt, 0, .4, gain)))
+        a4f(attribute(program, b'a_material'), *(material or (7.19, gold, 16, .5)))
+        a3f(attribute(program, b'a_glint'), *glint)
         clear(0x4000)
         draw(4, 0, 6)
         pixels = (C.c_ubyte * (side * side * 4))()
@@ -123,7 +125,7 @@ try:
         assert error() == 0, '显卡离屏绘制失败'
         return bytes(pixels)
 
-    assert not any(frame(5)), '透明背景不能自行产生闪点'
+    assert not any(frame(5, glint=(.74, .5, 1))), '没有真实遮罩覆盖时，强峰也不能凭空产生闪点'
     for y in range(side):
         for x in range(side):
             r = math.hypot((x + .5) / side - .5, (y + .5) / side - .5)
@@ -135,6 +137,34 @@ try:
     assert a != b, '表面法线应随时间改变反光'
     assert a != frame(5, tilt=.6), '表面转动应改变反光'
     assert not any(frame(5, gain=0)), '结束或减少动态时不留残光'
+    assert not any(frame(5, gain=0, glint=(.74, .5, 1))), '结束或减少动态时共享强峰也必须清空'
+    assert frame(5, glint=(.5, .5, 1)) == frame(5), '强峰放在空心孔时不能产生白核或泛光'
+
+    # 使用 JavaScript 真实输出的锚点与迎光峰；核对其确实改变显卡像素，而非只检查接口数值。
+    probe = source['probe']
+    u, v, energy = probe['glint']
+    assert .16 < math.hypot(u - .5, v - .5) < .36 and energy > .1
+    options = dict(material=probe['material'], pose=probe['pose'])
+    dim = frame(probe['time'], glint=(u, v, 0), **options)
+    strong = frame(probe['time'], glint=(u, v, energy), **options)
+    weak = frame(probe['time'], glint=(u, v, energy * .25), **options)
+    additions = [max(0, bright - faint) for bright, faint in zip(strong[3::4], dim[3::4])]
+    weak_energy = sum(max(0, bright - faint) for bright, faint in zip(weak[3::4], dim[3::4]))
+    assert sum(additions) > weak_energy > 0, '传入的同一反射峰必须连续控制实际白核和泛光'
+    cx, cy = u * side - .5, (1 - v) * side - .5
+    near_source = sum(value for i, value in enumerate(additions)
+                      if math.hypot(i % side - cx, i // side - cy) < 3)
+    assert near_source > sum(additions) * .55, '最亮能量必须集中在真实反光源附近'
+    assert max(strong[3::4]) >= 240, '强峰需要清楚的白亮核'
+
+    # 小于一纹素的移动不会丢失大部分亮核能量；模拟图集采样相位变化，不读取浏览器画面。
+    def glint_energy(offset):
+        base = frame(5)
+        pixels = frame(5, glint=(.74 + offset / side, .5, .8))
+        return sum(max(0, light - dark) for light, dark in zip(pixels[3::4], base[3::4]))
+
+    subpixel = [glint_energy(offset) for offset in (0, .2, .4, .6, .8)]
+    assert min(subpixel) > max(subpixel) * .75, '亮核能量不能因亚像素位置而大幅跳变'
     bright = visible = maximum = 0
     for f in range(100):
         pixels = frame(f * .13)
@@ -147,7 +177,7 @@ try:
     assert bright > 0 and visible > 100, '反光阈值过高，无法看见'
     assert bright < 100 * side * side * .04 and maximum < side * side * .08, '极亮像素过密'
     assert frame(8, gold=1) != frame(8, gold=0), '金银反光应可区分'
-    print(f'显卡检查通过：实际编译与链接、透明遮罩、角度与时间响应、回拖一致、金银区分；强亮像素占 {100 * bright / (100 * side * side):.3f}%，单帧最高 {maximum}。')
+    print(f'显卡检查通过：实际编译与链接、共享强峰的亮核/泛光、空心孔、亚像素能量、姿态响应、回拖与金银区分；细反射强亮像素占 {100 * bright / (100 * side * side):.3f}%，单帧最高 {maximum}；共享峰能量 {energy:.3f}。')
 finally:
     current(None)
     destroy(context)

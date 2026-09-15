@@ -172,9 +172,9 @@
         if(!ctx||failed||!enabled||ctx.state!=='running'||previous===null||time<previous||time-previous>.25)return;
         for(const [i,star] of (stages.stars||[]).entries()){
           const cycle=Math.floor((time-star.first)/star.period),at=star.first+cycle*star.period;
-          if(cycle<0||at<=previous||at>time||starVoices.size>=7)continue;
+          if(cycle<0||at<=previous||at>time||at>=(star.end??Infinity)||starVoices.size>=7)continue;
           const node=ctx.createBufferSource(),gain=ctx.createGain(),voice={node,gain};
-          gain.gain.value=smooth((at-18)/1.2);
+          gain.gain.value=smooth((at-18)/1.2)*(star.end===undefined?1:1-smooth((at-star.fadeAt)/(star.end-star.fadeAt)));
           node.buffer=starBuffers[i];node.connect(gain);gain.connect(master);starVoices.add(voice);
           node.onended=()=>{node.disconnect();gain.disconnect();starVoices.delete(voice);};
           node.start(ctx.currentTime,Math.max(0,time-at));
